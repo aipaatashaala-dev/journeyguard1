@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - FIREBASE_CREDENTIALS_JSON=${FIREBASE_CREDENTIALS_JSON:-}
+      - FIREBASE_CREDENTIALS_PATH=/app/firebase-credentials.json
+      - FIREBASE_DATABASE_URL=${FIREBASE_DATABASE_URL:-https://journeyguard-default-rtdb.firebaseio.com/}
+      - EMAIL_HOST=${EMAIL_HOST}
+      - EMAIL_PORT=${EMAIL_PORT}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD}
+      - FRONTEND_URL=${FRONTEND_URL:-https://journeyguard.in}
+      - EXTRA_CORS_ORIGINS=${EXTRA_CORS_ORIGINS:-https://www.journeyguard.in}
+      - LOCATION_TOKEN_SECRET=${LOCATION_TOKEN_SECRET}
+    volumes:
+      - ./backend/firebase-credentials.json:/app/firebase-credentials.json:ro  # optional fallback for local dev
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JourneyGuard</string>
+    <string name="logo_desc">JourneyGuard logo</string>
+    <string name="tagline">Trusted AI Lock Protection</string>
+    <string name="train_face">Train Owner Face</string>
+    <string name="service_stopped">Mobile protection: Stopped</string>
+    <string name="service_running">Mobile protection: Active</string>
+    <string name="face_not_trained">Face: Not Trained</string>
+    <string name="face_trained">Face: Trained</string>
+    <string name="btn_start_protection">Enable Mobile Protection</string>
+    <string name="btn_stop_protection">Stop Mobile Protection</string>
+    <string name="btn_test_verify">Test Face Verify</string>
+    <string name="btn_simulate_alarm">Simulate Alarm</string>
+    <string name="btn_clear_face">Clear Face Data</string>
+    <string name="instructions_header">How to use:</string>
+    <string name="instructions_steps">1. Tap Train Owner Face and capture your face.
+2. Tap Enable Mobile Protection to activate background protection.
+3. Motion while locked triggers a 10-second unlock grace period.
+4. If still locked, the phone vibrates for 10 seconds.
+5. The alarm then keeps ringing until the phone is unlocked.</string>
+    <string name="login_username">Username</string>
+    <string name="login_password">Password</string>
+    <string name="login_button">Log In</string>
+    <string name="no_account">Don\'t have an account?</string>
+    <string name="register_button">Register</string>
+    <string name="register_username">Choose username</string>
+    <string name="register_password">Choose password</string>
+    <string name="speed_label">Speed</string>
+    <string name="support_button">24/7 Support</string>
+    <string name="support_email">support@journeyguard.com</string>
+    <string name="mobile_protection_summary">Sensor-based motion detection watches the phone while locked. If movement is detected, JourneyGuard waits 10 seconds, vibrates for 10 seconds, then starts the alarm until you unlock the device.</string>
+</resources>

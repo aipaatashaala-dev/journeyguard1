@@ -1,0 +1,276 @@
+from pydantic import BaseModel, EmailStr, field_validator
+from typing import Optional, List
+from datetime import datetime
+
+
+# ── Auth ────────────────────────────────────────────────────────────────────
+class RegisterRequest(BaseModel):
+    email: EmailStr
+    password: str
+    confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def pw_min_length(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
+
+    @field_validator("confirm_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if v != info.data.get("password"):
+            raise ValueError("Passwords do not match")
+        return v
+
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: str
+
+
+class SetPasswordRequest(BaseModel):
+    password: str
+    confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def pw_min_length(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
+
+    @field_validator("confirm_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if v != info.data.get("password"):
+            raise ValueError("Passwords do not match")
+        return v
+
+
+class UpdateUserProfileRequest(BaseModel):
+    email: Optional[str] = None
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, v):
+        if v and "@" not in v:
+            raise ValueError("Invalid email format")
+        return v
+        return v
+
+
+class JoinJourneyRequest(BaseModel):
+    train_number: str
+    journey_date: str          # YYYY-MM-DD
+    coach: str
+    berth: str
+    arrival_time: Optional[str] = None
+
+
+class TrainInfoResponse(BaseModel):
+    train_exists: bool
+    train_number: str
+    journey_date: str
+    train_name: Optional[str] = None
+    from_station: Optional[str] = None
+    to_station: Optional[str] = None
+    departure: Optional[str] = None
+    arrival: Optional[str] = None
+    current_status: Optional[str] = None
+    current_station: Optional[str] = None
+    next_station_name: Optional[str] = None
+    expected_arrival: Optional[str] = None
+    speed: Optional[str] = None
+    cancelled: bool = False
+    route_changed: bool = False
+    api_message: Optional[str] = None
+
+
+# ── PNR Multi-Berth ─────────────────────────────────────────────────────────
+class BerthSlot(BaseModel):
+    berth_number: str
+    berth_type: str
+    passenger_name: Optional[str] = None
+    status: str  # CNF | RAC | WL | AVAILABLE | CLAIMED
+    claimed_by: Optional[str] = None
+    claimed_at: Optional[int] = None
+
+
+class PNRDetailsResponse(BaseModel):
+    pnr: str
+    train_number: str
+    train_name: str
+    journey_date: str
+    coach: str
+    from_station: str
+    to_station: str
+    departure: str
+    arrival: str
+    berth: Optional[str] = None  # Passenger's booked berth from API
+    all_berths: Optional[List[BerthSlot]] = None  # All berths for this PNR
+    available_berths: Optional[List[str]] = None  # List of available berth numbers
+
+
+class ClaimBerthRequest(BaseModel):
+    berth_number: str
+
+
+# ── Assistance Requests ──────────────────────────────────────────────────────
+class AssistanceRequestCreate(BaseModel):
+    journey_id: str
+    coach_id: str
+    request_type: str          # MEDICAL | FOOD | BERTH | EMERGENCY
+
+    @field_validator("request_type")
+    @classmethod
+    def valid_type(cls, v):
+        allowed = {"MEDICAL", "FOOD", "BERTH", "EMERGENCY"}
+        if v.upper() not in allowed:
+            raise ValueError(f"request_type must be one of {allowed}")
+        return v.upper()
+
+
+class StartLocationRequest(BaseModel):
+    journey_id: str
+    passenger_id: str
+    train_number: str
+    journey_date: str
+    user_email: Optional[str] = None
+
+
+class UpdateLocationRequest(BaseModel):
+    journey_id: str
+    lat: float
+    lng: float
+    accuracy: Optional[float] = None
+
+
+class LocationLinkResponse(BaseModel):
+    tracking_link: str
+    journey_id: str
+    expires_at: Optional[str] = None
+
+
+class GroupAIReplyRequest(BaseModel):
+    journey_id: str
+    coach_id: str
+    message: str
+    train_number: Optional[str] = None
+    journey_date: Optional[str] = None
+    train_name: Optional[str] = None
+    from_station: Optional[str] = None
+    to_station: Optional[str] = None
+    current_station: Optional[str] = None
+    next_station_name: Optional[str] = None
+    expected_arrival: Optional[str] = None
+    speed: Optional[str] = None
+
+
+class AIThreadMessage(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: int
+    sender_label: Optional[str] = None
+    is_ai: bool = False
+
+
+class AIThreadResponse(BaseModel):
+    messages: List[AIThreadMessage]
+    journey_id: str
+    coach_id: str
+
+
+# ── Journey Details ────────────────────────────────────────────────────────────
+class JourneyDetails(BaseModel):
+    pnr: str
+    train_number: str
+    train_name: str
+    journey_date: str
+    coach: str
+    berth: str
+    berth_type: str
+    from_station: str
+    to_station: str
+    departure: str
+    arrival: str
+    status: str
+
+
+class AdminOtpRequest(BaseModel):
+    email: EmailStr
+
+
+class AdminOtpVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+
+class AdminAuthResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    admin_email: EmailStr
+    expires_at: int
+
+
+class UserResponse(BaseModel):
+    uid: str
+    email: str
+    mobile_number: Optional[str] = ""
+    created_at: Optional[int] = 0
+    active_group_id: Optional[str] = ""
+    active_coach_id: Optional[str] = ""
+    passenger_id: Optional[str] = ""
+
+
+class JourneyResponse(BaseModel):
+    group_id: str
+    train_number: str
+    date: str
+    passenger_count: int
+    coach_count: int
+    status: Optional[str] = "active"
+    cleanup_at: Optional[int] = None
+
+
+class LocationResponse(BaseModel):
+    id: str
+    passenger_id: str
+    train_number: str
+    coach: Optional[str] = ""
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy: Optional[float] = None
+    updated_at: Optional[int] = 0
+
+
+class RequestResponse(BaseModel):
+    id: str
+    group_id: str
+    passenger_id: str
+    type: str
+    timestamp: int
+
+
+class ProtectionCommandRequest(BaseModel):
+    location_enabled: bool = False
+
+
+class ProtectionLocationUpdateRequest(BaseModel):
+    lat: float
+    lng: float
+    accuracy: Optional[float] = None
+    location_enabled: bool = True
+
+
+class ProtectionStateResponse(BaseModel):
+    active: bool = False
+    location_enabled: bool = False
+    email: Optional[str] = None
+    updated_at: Optional[int] = 0
+    started_at: Optional[int] = 0
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy: Optional[float] = None
+    source: Optional[str] = None

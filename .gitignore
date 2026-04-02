@@ -1,0 +1,27 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+# ignore firebase service account credentials
+backend/serviceAccountKey.json
+backend/.env
+
+# frontend dependencies
+frontend/node_modules/
+backend/firebase-credentials.json
+*.json
+.env
+
+
+node_modules/
+backend/firebase-credentials.json
+.env
+__pycache__/
+build/
+dist/

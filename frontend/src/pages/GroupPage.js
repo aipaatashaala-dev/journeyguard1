@@ -30,6 +30,13 @@ import {
   updateRequest,
 } from '../utils/api';
 import { API_BASE_URL } from '../utils/config';
+import {
+  DEFAULT_GEOLOCATION_OPTIONS,
+  getGeolocationErrorMessage,
+  getGeolocationUnavailableMessage,
+  requestCurrentPosition,
+} from '../utils/geolocation';
+import { resolveTrackingLink } from '../utils/locationLinks';
 import './GroupPage.css';
 
 const REQ_TYPES = [
@@ -271,6 +278,7 @@ export default function GroupPage() {
       setSharingLocation(false);
       setCurrentLocation(null);
       setLocationLink('');
+      lastCoordsRef.current = null;
 
       if (locationMessageId) {
         await deleteRequest(journeyId, coachId, locationMessageId);
@@ -286,13 +294,20 @@ export default function GroupPage() {
   };
 
   const startLocationShare = async () => {
-    if (!navigator.geolocation) {
-      toast.error('Geolocation is not supported on this device');
+    const unavailableMessage = getGeolocationUnavailableMessage();
+    if (unavailableMessage) {
+      toast.error(unavailableMessage);
       return;
     }
 
+    let sessionCreated = false;
+    let createdRequestId = '';
+
     try {
+      const initialPosition = await requestCurrentPosition(DEFAULT_GEOLOCATION_OPTIONS);
+
       setSharingLocation(true);
+      lastCoordsRef.current = null;
 
       const res = await startLocationTracking({
         journey_id: journeyId,
@@ -301,8 +316,9 @@ export default function GroupPage() {
         journey_date: journeyData.journeyDate,
         user_email: user?.email || '',
       });
+      sessionCreated = true;
 
-      const link = res.data?.tracking_link;
+      const link = resolveTrackingLink(res.data?.tracking_link);
       setLocationLink(link || '');
       const expiresAt = Date.now() + 60 * 60 * 1000;
 
@@ -314,8 +330,8 @@ export default function GroupPage() {
         location_link: link,
         expires_at: expiresAt,
       });
-      const newRequestId = requestRes.data?.request_id;
-      setLocationMessageId(newRequestId || '');
+      createdRequestId = requestRes.data?.request_id || '';
+      setLocationMessageId(createdRequestId);
 
       const sendCoords = async (coords) => {
         const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${coords.latitude},${coords.longitude}`;
@@ -328,8 +344,8 @@ export default function GroupPage() {
         lastCoordsRef.current = payload;
         setCurrentLocation({ lat: coords.latitude, lng: coords.longitude });
         await updateLocation(payload);
-        if (newRequestId) {
-          await updateRequest(journeyId, coachId, newRequestId, {
+        if (createdRequestId) {
+          await updateRequest(journeyId, coachId, createdRequestId, {
             lat: coords.latitude,
             lng: coords.longitude,
             google_maps_url: googleMapsUrl,
@@ -341,19 +357,21 @@ export default function GroupPage() {
         }
       };
 
+      await sendCoords(initialPosition.coords);
+
       watchRef.current = navigator.geolocation.watchPosition(
         (pos) => {
           sendCoords(pos.coords).catch(() => {});
         },
         (error) => {
-          setSharingLocation(false);
-          toast.error(error.message || 'Location permission denied');
+          const errorMessage = getGeolocationErrorMessage(error);
+          stopLocationShare(false)
+            .catch(() => {})
+            .finally(() => {
+              toast.error(errorMessage);
+            });
         },
-        {
-          enableHighAccuracy: true,
-          timeout: 10000,
-          maximumAge: 5000,
-        }
+        DEFAULT_GEOLOCATION_OPTIONS
       );
 
       intervalRef.current = setInterval(() => {
@@ -368,8 +386,36 @@ export default function GroupPage() {
 
       toast.success('Live location shared in the coach group');
     } catch (error) {
+      if (watchRef.current) {
+        navigator.geolocation.clearWatch(watchRef.current);
+        watchRef.current = null;
+      }
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      if (createdRequestId) {
+        await deleteRequest(journeyId, coachId, createdRequestId).catch(() => {});
+        setLocationMessageId('');
+      }
+      if (sessionCreated) {
+        await stopLocationTracking(journeyId).catch(() => {});
+      }
+
       setSharingLocation(false);
-      toast.error(error?.response?.data?.detail || 'Could not start location sharing');
+      setCurrentLocation(null);
+      setLocationLink('');
+      lastCoordsRef.current = null;
+
+      toast.error(
+        error?.response?.data?.detail ||
+          error?.message ||
+          'Could not start location sharing'
+      );
     }
   };
 
@@ -661,6 +707,7 @@ function LocationMessageCard({ message }) {
   const googleMapsUrl = message.google_maps_url || `https://www.google.com/maps/search/?api=1&query=${message.lat},${message.lng}`;
   const googleEmbedUrl = `https://maps.google.com/maps?q=${message.lat},${message.lng}&z=14&output=embed`;
   const minutesLeft = message.expires_at ? Math.max(0, Math.ceil((message.expires_at - Date.now()) / 60000)) : null;
+  const trackingLink = resolveTrackingLink(message.location_link);
 
   return (
     <div style={{ display: 'grid', gap: '0.75rem' }}>
@@ -700,8 +747,8 @@ function LocationMessageCard({ message }) {
           <ExternalLink size={14} />
           Open in Google Maps
         </a>
-        {message.location_link && (
-          <a href={message.location_link} target="_blank" rel="noreferrer" className="action-chip" style={{ textDecoration: 'none' }}>
+        {trackingLink && (
+          <a href={trackingLink} target="_blank" rel="noreferrer" className="action-chip" style={{ textDecoration: 'none' }}>
             <MapPin size={14} />
             Open live tracker
           </a>

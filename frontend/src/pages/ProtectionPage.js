@@ -8,8 +8,15 @@ import {
   startProtection,
   stopLocationTracking,
   stopProtection,
+  updateLocation,
   updateProtectionLocation,
 } from '../utils/api';
+import {
+  DEFAULT_GEOLOCATION_OPTIONS,
+  getGeolocationUnavailableMessage,
+  requestCurrentPosition,
+} from '../utils/geolocation';
+import { resolveTrackingLink } from '../utils/locationLinks';
 import toast from 'react-hot-toast';
 import {
   Bell,
@@ -125,8 +132,9 @@ export default function ProtectionPage() {
     getLocationLink(journeyId)
       .then(({ data }) => {
         if (data?.tracking_link) {
-          setTrackingLink(data.tracking_link);
-          localStorage.setItem('jg_track_link', data.tracking_link);
+          const resolvedLink = resolveTrackingLink(data.tracking_link);
+          setTrackingLink(resolvedLink);
+          localStorage.setItem('jg_track_link', resolvedLink);
         }
       })
       .catch((error) => {
@@ -207,10 +215,21 @@ export default function ProtectionPage() {
     const nextState = !locationSharingOn;
     setSavingState(true);
 
+    let sessionCreated = false;
+
     try {
       if (nextState) {
-        localStorage.setItem('jg_location', 'true');
-        setLocationSharingOn(true);
+        const unavailableMessage = getGeolocationUnavailableMessage();
+        if (unavailableMessage) {
+          throw new Error(unavailableMessage);
+        }
+
+        const initialPosition = await requestCurrentPosition(DEFAULT_GEOLOCATION_OPTIONS);
+        const initialCoords = {
+          lat: initialPosition.coords.latitude,
+          lng: initialPosition.coords.longitude,
+          accuracy: initialPosition.coords.accuracy,
+        };
 
         if (journeyId) {
           const { data } = await startLocationTracking({
@@ -220,15 +239,39 @@ export default function ProtectionPage() {
             train_number: journeyData?.trainNumber || '',
             journey_date: journeyData?.journeyDate || '',
           });
+          sessionCreated = true;
 
-          const link = data?.tracking_link || `${window.location.origin}/track/${journeyId}`;
+          const link = resolveTrackingLink(data?.tracking_link);
           setTrackingLink(link);
           setEmailSent(Boolean(user?.email));
-          localStorage.setItem('jg_track_link', link);
+          if (link) {
+            localStorage.setItem('jg_track_link', link);
+          } else {
+            localStorage.removeItem('jg_track_link');
+          }
+
+          await updateLocation({
+            journey_id: journeyId,
+            lat: initialCoords.lat,
+            lng: initialCoords.lng,
+            accuracy: initialCoords.accuracy,
+          });
         } else {
           setTrackingLink('');
           setEmailSent(false);
         }
+
+        await updateProtectionLocation({
+          lat: initialCoords.lat,
+          lng: initialCoords.lng,
+          accuracy: initialCoords.accuracy,
+          location_enabled: true,
+        }).then(({ data }) => {
+          setProtectionState((prev) => ({ ...prev, ...data }));
+        });
+
+        localStorage.setItem('jg_location', 'true');
+        setLocationSharingOn(true);
 
         if (protectionState.active) {
           const updated = await startProtection({ location_enabled: true });
@@ -258,7 +301,20 @@ export default function ProtectionPage() {
         toast.success('Mobile live location is now off');
       }
     } catch (error) {
-      toast.error(error?.response?.data?.detail || 'Could not update mobile live location');
+      if (sessionCreated && journeyId) {
+        await stopLocationTracking(journeyId).catch(() => {});
+      }
+      localStorage.setItem('jg_location', 'false');
+      setLocationSharingOn(false);
+      setTrackingLink('');
+      setEmailSent(false);
+      localStorage.removeItem('jg_track_link');
+
+      toast.error(
+        error?.response?.data?.detail ||
+          error?.message ||
+          'Could not update mobile live location'
+      );
     } finally {
       setSavingState(false);
     }

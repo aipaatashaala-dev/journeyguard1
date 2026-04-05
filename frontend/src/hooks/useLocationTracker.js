@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { updateLocation } from '../utils/api';
+import {
+  DEFAULT_GEOLOCATION_OPTIONS,
+  getGeolocationErrorMessage,
+  getGeolocationUnavailableMessage,
+} from '../utils/geolocation';
 
 export function useLocationTracker(journeyId, isActive) {
   const [position, setPosition] = useState(null);
@@ -30,19 +35,15 @@ export function useLocationTracker(journeyId, isActive) {
     if (!isActive) {
       if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current);
       if (intervalRef.current) clearInterval(intervalRef.current);
+      setError(null);
       return;
     }
 
-    if (!navigator.geolocation) {
-      setError('Geolocation not supported by your browser');
+    const unavailableMessage = getGeolocationUnavailableMessage();
+    if (unavailableMessage) {
+      setError(unavailableMessage);
       return;
     }
-
-    const options = {
-      enableHighAccuracy: true,
-      timeout: 10000,
-      maximumAge: 5000,
-    };
 
     watchRef.current = navigator.geolocation.watchPosition(
       (pos) => {
@@ -57,8 +58,8 @@ export function useLocationTracker(journeyId, isActive) {
           sendLocation(latitude, longitude, acc);
         }
       },
-      (err) => setError(err.message),
-      options
+      (err) => setError(getGeolocationErrorMessage(err)),
+      DEFAULT_GEOLOCATION_OPTIONS
     );
 
     // Periodic push every 60s regardless of movement

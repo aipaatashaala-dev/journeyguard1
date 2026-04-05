@@ -29,7 +29,7 @@ app = FastAPI(
     version="1.0.0-beta",
 )
 
-frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000").rstrip("/")
+frontend_url = os.getenv("FRONTEND_URL", "https://journeyguard.in").rstrip("/")
 extra_cors_origins = [
     origin.strip().rstrip("/")
     for origin in os.getenv("EXTRA_CORS_ORIGINS", "").split(",")

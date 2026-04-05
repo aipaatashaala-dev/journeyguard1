@@ -1,6 +1,4 @@
-import time
-from fastapi import APIRouter, HTTPException, Depends
-from firebase_admin import db as fb_db
+from fastapi import APIRouter, HTTPException, Depends, Request
 from dependencies import get_current_user
 from models.schemas import StartLocationRequest, UpdateLocationRequest, LocationLinkResponse
 from services.location_service import (
@@ -16,11 +14,11 @@ from services.email_service import send_location_tracking_email
 router = APIRouter()
 
 
-def _public_location_payload(journey_id: str, data: dict) -> dict:
+def _public_location_payload(journey_id: str, data: dict, request: Request | None = None) -> dict:
     token = data.get("token", journey_id)
     return {
         "journey_id": journey_id,
-        "tracking_link": tracking_link_for_token(token),
+        "tracking_link": tracking_link_for_token(token, request),
         "expired": bool(data.get("expired")),
         "active": bool(data.get("active")),
         "lat": data.get("lat"),
@@ -34,7 +32,7 @@ def _public_location_payload(journey_id: str, data: dict) -> dict:
 
 
 @router.post("/start", response_model=LocationLinkResponse)
-async def start_tracking(body: StartLocationRequest, user: dict = Depends(get_current_user)):
+async def start_tracking(body: StartLocationRequest, request: Request, user: dict = Depends(get_current_user)):
     uid = user["uid"]
 
     meta = {
@@ -44,7 +42,7 @@ async def start_tracking(body: StartLocationRequest, user: dict = Depends(get_cu
         "uid"         : uid,
     }
     token = start_location_session(body.journey_id, uid, meta)
-    link  = tracking_link_for_token(token)
+    link  = tracking_link_for_token(token, request)
 
     # Send email with the tracking link — non-blocking
     try:
@@ -92,7 +90,7 @@ async def stop_tracking(journey_id: str, user: dict = Depends(get_current_user))
 
 
 @router.get("/public/{token}")
-async def get_public_location(token: str):
+async def get_public_location(token: str, request: Request):
     payload = verify_tracking_token(token)
     if not payload:
         raise HTTPException(status_code=404, detail="Tracking link is invalid or expired")
@@ -102,21 +100,21 @@ async def get_public_location(token: str):
     if not data or data.get("token") != token:
         raise HTTPException(status_code=404, detail="No location session found")
 
-    return _public_location_payload(journey_id, data)
+    return _public_location_payload(journey_id, data, request)
 
 
 @router.get("/{journey_id}")
-async def get_location_status(journey_id: str, user: dict = Depends(get_current_user)):
+async def get_location_status(journey_id: str, request: Request, user: dict = Depends(get_current_user)):
     data = get_location_data(journey_id)
     if not data:
         raise HTTPException(status_code=404, detail="No location session found")
     if data.get("uid") != user["uid"]:
         raise HTTPException(status_code=403, detail="Not your journey")
-    return _public_location_payload(journey_id, data)
+    return _public_location_payload(journey_id, data, request)
 
 
 @router.get("/{journey_id}/link", response_model=LocationLinkResponse)
-async def get_link(journey_id: str, user: dict = Depends(get_current_user)):
+async def get_link(journey_id: str, request: Request, user: dict = Depends(get_current_user)):
     data = get_location_data(journey_id)
     if not data:
         raise HTTPException(status_code=404, detail="No location session found")
@@ -125,6 +123,6 @@ async def get_link(journey_id: str, user: dict = Depends(get_current_user)):
 
     token = data.get("token", journey_id)
     return LocationLinkResponse(
-        tracking_link=tracking_link_for_token(token),
+        tracking_link=tracking_link_for_token(token, request),
         journey_id   =journey_id,
     )

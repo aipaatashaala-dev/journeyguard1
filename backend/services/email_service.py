@@ -24,7 +24,7 @@ EMAIL_PORT     = int(os.getenv("EMAIL_PORT", 587))
 EMAIL_USER     = os.getenv("EMAIL_USER", "")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
 EMAIL_FROM     = os.getenv("EMAIL_FROM", f"JourneyGuard <{EMAIL_USER}>")
-FRONTEND_URL   = os.getenv("FRONTEND_URL", "http://localhost:3000")
+FRONTEND_URL   = os.getenv("FRONTEND_URL", "https://journeyguard.in")
 
 
 def _send(to: str, subject: str, html_body: str) -> bool:

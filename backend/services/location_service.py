@@ -10,10 +10,13 @@ import json
 import time
 import hmac
 import hashlib
+import ipaddress
+from urllib.parse import urlparse
 from firebase_admin import db as fb_db
 
-FRONTEND_URL   = os.getenv("FRONTEND_URL", "http://localhost:3000")
+DEFAULT_FRONTEND_URL = "https://journeyguard.in"
 _SECRET        = os.getenv("LOCATION_TOKEN_SECRET", "journeyguard-secret-change-me")
+_LOCAL_HOSTS   = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
 
 
 # ── Token helpers ─────────────────────────────────────────────────────────────
@@ -48,8 +51,66 @@ def verify_tracking_token(token: str) -> dict | None:
         return None
 
 
-def tracking_link_for_token(token: str) -> str:
-    return f"{FRONTEND_URL}/track/{token}"
+def _normalize_url(value: str | None) -> str:
+    if not value:
+        return ""
+    return value.strip().rstrip("/")
+
+
+def _is_local_url(value: str) -> bool:
+    try:
+        host = urlparse(value).hostname or ""
+    except Exception:
+        return False
+
+    if host in _LOCAL_HOSTS or host.endswith(".localhost"):
+        return True
+
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+
+    return ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+
+
+def _origin_from_request(request) -> str:
+    if not request:
+        return ""
+
+    for header_name in ("origin", "referer"):
+        raw_value = request.headers.get(header_name)
+        if not raw_value:
+            continue
+
+        parsed = urlparse(raw_value)
+        if not parsed.scheme or not parsed.netloc:
+            continue
+
+        candidate = f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+        if not _is_local_url(candidate):
+            return candidate
+
+    return ""
+
+
+def resolve_frontend_url(request=None) -> str:
+    configured = _normalize_url(os.getenv("FRONTEND_URL", ""))
+    if configured and not _is_local_url(configured):
+        return configured
+
+    request_origin = _origin_from_request(request)
+    if request_origin:
+        return request_origin
+
+    if configured:
+        return configured
+
+    return DEFAULT_FRONTEND_URL
+
+
+def tracking_link_for_token(token: str, request=None) -> str:
+    return f"{resolve_frontend_url(request)}/track/{token}"
 
 
 # ── Firebase writes ───────────────────────────────────────────────────────────

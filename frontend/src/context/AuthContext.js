@@ -10,7 +10,12 @@ import {
 } from 'firebase/auth';
 
 const AuthContext = createContext(null);
-const googleProvider = new GoogleAuthProvider();
+
+function createGoogleProvider() {
+  const provider = new GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: 'select_account' });
+  return provider;
+}
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
@@ -31,7 +36,7 @@ export function AuthProvider({ children }) {
     signInWithEmailAndPassword(auth, email, password);
 
   const loginWithGoogle = () =>
-    signInWithPopup(auth, googleProvider);
+    signInWithPopup(auth, createGoogleProvider());
 
   const logout = () => signOut(auth);
 

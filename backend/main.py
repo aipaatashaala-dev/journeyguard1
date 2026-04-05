@@ -15,7 +15,13 @@ import os
 
 load_dotenv(override=True)
 
+from dependencies import get_firebase_app
 from routers import auth, journey, requests as req_router, pnr, location, protection, ai, admin
+
+try:
+    get_firebase_app()
+except Exception as exc:
+    print(f"[WARN] Firebase init failed during app startup: {exc}")
 
 app = FastAPI(
     title="JourneyGuard API",
@@ -38,6 +44,7 @@ allow_origins = list(
             "ionic://localhost",
             frontend_url,
             "https://journeyguard.in",
+            "http://localhost:3000",
             "https://www.journeyguard.in",
             "https://journeyguard.web.app",
             "https://journeyguard.firebaseapp.com",

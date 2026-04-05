@@ -4,11 +4,17 @@ Shared dependencies: Firebase JWT verification, DB access.
 import base64
 import json
 import os
+from pathlib import Path
 from fastapi import Header, HTTPException, status
+from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth as fb_auth, db as fb_db
 
 # ── Firebase Admin init ──────────────────────────────────────────────────────
+_BASE_DIR = Path(__file__).resolve().parent
+_DEFAULT_FIREBASE_CREDENTIALS_PATH = _BASE_DIR / "firebase-credentials.json"
+load_dotenv(dotenv_path=_BASE_DIR / ".env", override=False)
+
 _firebase_app = None
 
 
@@ -28,9 +34,23 @@ def _decode_unverified_token(token: str) -> dict:
 def _dev_bypass_enabled() -> bool:
     return os.getenv("ALLOW_DEV_AUTH_BYPASS", "").strip().lower() in {"1", "true", "yes"}
 
+
+def _resolve_credentials_path(raw_path: str | None) -> Path:
+    candidate = Path(raw_path).expanduser() if raw_path else _DEFAULT_FIREBASE_CREDENTIALS_PATH
+    if not candidate.is_absolute():
+        candidate = (_BASE_DIR / candidate).resolve()
+    return candidate
+
+
 def get_firebase_app():
     global _firebase_app
     if _firebase_app is None:
+        try:
+            _firebase_app = firebase_admin.get_app()
+            return _firebase_app
+        except ValueError:
+            pass
+
         database_url = os.getenv("FIREBASE_DATABASE_URL", "https://journeyguard-default-rtdb.firebaseio.com/")
         firebase_json = os.getenv("FIREBASE_CREDENTIALS_JSON", "").strip()
 
@@ -45,8 +65,13 @@ def get_firebase_app():
                     raise ValueError("FIREBASE_CREDENTIALS_JSON must be valid JSON or base64-encoded JSON") from err
             cred = credentials.Certificate(service_account_info)
         else:
-            cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH", "firebase-credentials.json")
-            cred = credentials.Certificate(cred_path)
+            cred_path = _resolve_credentials_path(os.getenv("FIREBASE_CREDENTIALS_PATH"))
+            if not cred_path.exists():
+                raise FileNotFoundError(
+                    "Firebase credentials file not found. "
+                    "Set FIREBASE_CREDENTIALS_JSON or FIREBASE_CREDENTIALS_PATH."
+                )
+            cred = credentials.Certificate(str(cred_path))
 
         _firebase_app = firebase_admin.initialize_app(cred, {
             "databaseURL": database_url
@@ -68,6 +93,28 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth header")
     token = authorization.split(" ", 1)[1]
+    try:
+        get_firebase_app()
+    except Exception as e:
+        if _dev_bypass_enabled():
+            payload = _decode_unverified_token(token)
+            dev_user = {
+                "uid": payload.get("user_id") or payload.get("uid") or payload.get("sub") or os.getenv("DEV_AUTH_UID", "local-dev-user"),
+                "email": payload.get("email") or os.getenv("DEV_AUTH_EMAIL", "localdev@journeyguard.local"),
+                "name": payload.get("name"),
+                "auth_bypassed": True,
+            }
+            print(f"[WARN] Firebase auth bypass enabled. Using local dev identity: {dev_user['uid']}")
+            return dev_user
+
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Firebase admin is not configured on the server. "
+                "Set FIREBASE_CREDENTIALS_JSON or FIREBASE_CREDENTIALS_PATH."
+            ),
+        )
+
     try:
         decoded = fb_auth.verify_id_token(token)
         return decoded
@@ -102,4 +149,5 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
 
 # ── Firebase DB helper ───────────────────────────────────────────────────────
 def get_db():
+    get_firebase_app()
     return fb_db

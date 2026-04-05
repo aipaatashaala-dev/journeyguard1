@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { db } from '../firebase';
-import { ref, onValue } from 'firebase/database';
 import { MapPin, Smartphone, Signal, Battery, Zap, Navigation, AlertCircle } from 'lucide-react';
 import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import L from 'leaflet';
+import { getCurrentJourneyCompat, getLocationStatus } from '../utils/api';
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -22,23 +21,61 @@ export default function LocationPage() {
 
   // Load journey
   useEffect(() => {
-    const stored = localStorage.getItem('jg_journey');
-    if (stored) setJourneyData(JSON.parse(stored));
+    let active = true;
+
+    const loadJourney = async () => {
+      try {
+        const { data } = await getCurrentJourneyCompat();
+        if (!active) return;
+        if (data?.journey) {
+          setJourneyData({
+            journeyId: data.journey.group_id,
+            trainNumber: data.journey.train_number,
+            coach: data.journey.coach || data.journey.coach_id?.replace('coach_', '') || 'general',
+            journeyDate: data.journey.journey_date,
+            berth: data.journey.berth || '',
+          });
+        }
+      } catch (error) {
+        if (!active) return;
+        console.error('Failed to load journey for location page', error);
+      }
+    };
+
+    loadJourney();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Load location data
   useEffect(() => {
-    if (!journeyData?.journey_id) return;
-    const locRef = ref(db, `locations/${journeyData.journey_id}`);
-    const unsubscribe = onValue(locRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val();
+    if (!journeyData?.journeyId) return undefined;
+
+    let active = true;
+
+    const loadLocation = async () => {
+      try {
+        const { data } = await getLocationStatus(journeyData.journeyId);
+        if (!active) return;
         setLocationData(data);
-        setTracking(!data.expired);
+        setTracking(!data?.expired);
+      } catch (error) {
+        if (!active) return;
+        setLocationData(null);
+        setTracking(false);
       }
-    });
-    return unsubscribe;
-  }, [journeyData?.journey_id]);
+    };
+
+    loadLocation();
+    const intervalId = window.setInterval(loadLocation, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [journeyData?.journeyId]);
 
   // Get device position
   useEffect(() => {

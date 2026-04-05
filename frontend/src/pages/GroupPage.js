@@ -1,8 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { db } from '../firebase';
-import { ref, onValue, push, set, remove, update } from 'firebase/database';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft,
@@ -22,11 +20,17 @@ import {
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import {
+  getCurrentJourneyCompat,
+  getJourneyGroup,
+  getRequests,
+  sendRequest,
   getPrivateAiThread,
   sendPrivateAiMessage,
   startLocationTracking,
   stopLocationTracking,
   updateLocation,
+  deleteRequest,
+  updateRequest,
 } from '../utils/api';
 import { API_BASE_URL } from '../utils/config';
 import './GroupPage.css';
@@ -149,83 +153,81 @@ export default function GroupPage() {
   }, [user, journeyId, coachId]);
 
   useEffect(() => {
-    const pasRef = ref(db, `train_groups/${journeyId}/${coachId}`);
-    const unsub = onValue(pasRef, (snap) => {
-      if (!snap.exists()) {
-        clearStoredJourney();
-        setPassengers([]);
-        setMessages([]);
-        toast('This coach group is no longer active.');
-        navigate('/group', { replace: true });
-        return;
-      }
+    if (!user || !journeyId || !coachId) return undefined;
 
-      const list = [];
-      snap.forEach((child) => {
-        const data = child.val();
-        if (data?.passenger_id && child.key !== 'requests') {
-          list.push({ uid: child.key, ...data });
-        }
-      });
+    let active = true;
 
-      if (!list.some((passenger) => passenger.uid === user?.uid)) {
-        clearStoredJourney();
-        setPassengers([]);
-        setMessages([]);
-        toast('You are no longer part of this coach group.');
-        navigate('/group', { replace: true });
-        return;
-      }
+    const handleGroupUnavailable = (message) => {
+      clearStoredJourney();
+      setPassengers([]);
+      setMessages([]);
+      if (message) toast(message);
+      navigate('/group', { replace: true });
+    };
 
-      setPassengers(list);
-    });
+    const syncCoachData = async () => {
+      try {
+        const [{ data: journeyDataResp }, { data: groupData }, { data: requestData }] = await Promise.all([
+          getCurrentJourneyCompat(),
+          getJourneyGroup(journeyId, coachId),
+          getRequests(journeyId, coachId),
+        ]);
 
-    return () => unsub();
-  }, [journeyId, coachId, navigate, user?.uid]);
+        if (!active) return;
 
-  useEffect(() => {
-    const reqRef = ref(db, `train_groups/${journeyId}/${coachId}/requests`);
-    const unsub = onValue(reqRef, (snap) => {
-      const list = [];
-      snap.forEach((child) => {
-        list.push({ id: child.key, ...child.val() });
-      });
-      list.sort((a, b) => a.timestamp - b.timestamp);
-      const activeMessages = [];
-      list.forEach((item) => {
-        if (item.expires_at && Date.now() >= item.expires_at) {
-          remove(ref(db, `train_groups/${journeyId}/${coachId}/requests/${item.id}`)).catch(() => {});
+        if (!journeyDataResp?.journey) {
+          handleGroupUnavailable('This coach group is no longer active.');
           return;
         }
-        if (item.type === 'AI') {
+
+        const memberList = groupData?.passengers || [];
+        if (!memberList.some((passenger) => passenger.uid === user?.uid)) {
+          handleGroupUnavailable('You are no longer part of this coach group.');
           return;
         }
-        activeMessages.push(item);
-      });
-      setMessages(activeMessages);
 
-      if (
-        activeMessages.length > 0 &&
-        activeMessages[activeMessages.length - 1].id !== lastMessageIdRef.current &&
-        activeMessages[activeMessages.length - 1].uid !== user.uid
-      ) {
-        if ('Notification' in window && Notification.permission === 'granted') {
-          const latest = activeMessages[activeMessages.length - 1];
-          const rt = getReqType(latest.type, reqTypeMap);
-          new Notification(`New update in coach ${coachId?.replace('coach_', '')}`, {
-            body: `${latest.passenger_id}: ${latest.message || rt.label}`,
-            icon: '/favicon.ico',
-          });
+        setPassengers(memberList);
+
+        const activeMessages = (requestData?.requests || []).filter((item) => item.type !== 'AI');
+        setMessages(activeMessages);
+
+        if (
+          activeMessages.length > 0 &&
+          activeMessages[activeMessages.length - 1].id !== lastMessageIdRef.current &&
+          activeMessages[activeMessages.length - 1].uid !== user.uid
+        ) {
+          if ('Notification' in window && Notification.permission === 'granted') {
+            const latest = activeMessages[activeMessages.length - 1];
+            const rt = getReqType(latest.type, reqTypeMap);
+            new Notification(`New update in coach ${coachId?.replace('coach_', '')}`, {
+              body: `${latest.passenger_id}: ${latest.message || rt.label}`,
+              icon: '/favicon.ico',
+            });
+          }
         }
-      }
 
-      if (activeMessages.length > 0) {
-        lastMessageIdRef.current = activeMessages[activeMessages.length - 1].id;
+        if (activeMessages.length > 0) {
+          lastMessageIdRef.current = activeMessages[activeMessages.length - 1].id;
+        }
+      } catch (error) {
+        if (!active) return;
+        const status = error?.response?.status;
+        if (status === 403 || status === 404) {
+          handleGroupUnavailable('This coach group is no longer available.');
+          return;
+        }
+        console.error('Failed to sync coach data', error);
       }
-    });
+    };
 
-    return () => unsub();
-  }, [journeyId, coachId, user?.uid, reqTypeMap]);
+    syncCoachData();
+    const intervalId = window.setInterval(syncCoachData, 5000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [journeyId, coachId, navigate, user, reqTypeMap]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -299,32 +301,40 @@ export default function GroupPage() {
 
     setSending(true);
     try {
-      const reqRef = ref(db, `train_groups/${journeyId}/${coachId}/requests`);
-      const newReq = push(reqRef);
       const replyHeader = replyTo
         ? `Replying to ${replyTo.passenger_id}: ${replyTo.message || getReqType(replyTo.type, reqTypeMap).label}\n`
         : '';
 
-      await set(newReq, {
-        passenger_id: myPassengerId,
-        type: selectedReq || 'CHAT',
+      await sendRequest({
+        journey_id: journeyId,
+        coach_id: coachId,
+        request_type: selectedReq || 'CHAT',
         message: `${replyHeader}${text}`,
-        timestamp: Date.now(),
-        uid: user.uid,
       });
 
       setSelectedReq(null);
       setMessageText('');
       setReplyTo(null);
       toast.success('Sent to your coach group');
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Could not send your message');
     } finally {
       setSending(false);
     }
   };
 
-  const deleteMessage = async (msgId) => {
-    await remove(ref(db, `train_groups/${journeyId}/${coachId}/requests/${msgId}`));
-    toast.success('Message removed');
+  const deleteMessage = async (message) => {
+    if (!message?.id || message.uid !== user?.uid) {
+      toast.error('You can delete only your own messages');
+      return;
+    }
+
+    try {
+      await deleteRequest(journeyId, coachId, message.id);
+      toast.success('Message removed');
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Could not delete this message');
+    }
   };
 
   const sendAcceptedReply = async (message) => {
@@ -353,7 +363,7 @@ export default function GroupPage() {
       setLocationLink('');
 
       if (locationMessageId) {
-        await remove(ref(db, `train_groups/${journeyId}/${coachId}/requests/${locationMessageId}`));
+        await deleteRequest(journeyId, coachId, locationMessageId);
         setLocationMessageId('');
       }
 
@@ -386,18 +396,16 @@ export default function GroupPage() {
       setLocationLink(link || '');
       const expiresAt = Date.now() + 60 * 60 * 1000;
 
-      const reqRef = ref(db, `train_groups/${journeyId}/${coachId}/requests`);
-      const newReq = push(reqRef);
-      setLocationMessageId(newReq.key);
-      await set(newReq, {
-        passenger_id: myPassengerId,
-        type: 'LOCATION',
+      const requestRes = await sendRequest({
+        journey_id: journeyId,
+        coach_id: coachId,
+        request_type: 'LOCATION',
         message: 'Live train location active for 1 hour.',
         location_link: link,
         expires_at: expiresAt,
-        timestamp: Date.now(),
-        uid: user.uid,
       });
+      const newRequestId = requestRes.data?.request_id;
+      setLocationMessageId(newRequestId || '');
 
       const sendCoords = async (coords) => {
         const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${coords.latitude},${coords.longitude}`;
@@ -410,14 +418,15 @@ export default function GroupPage() {
         lastCoordsRef.current = payload;
         setCurrentLocation({ lat: coords.latitude, lng: coords.longitude });
         await updateLocation(payload);
-        if (newReq.key) {
-          await update(ref(db, `train_groups/${journeyId}/${coachId}/requests/${newReq.key}`), {
+        if (newRequestId) {
+          await updateRequest(journeyId, coachId, newRequestId, {
             lat: coords.latitude,
             lng: coords.longitude,
             google_maps_url: googleMapsUrl,
             location_link: link,
             expires_at: expiresAt,
             message: 'Live train location active for 1 hour.',
+            accuracy: coords.accuracy,
           });
         }
       };
@@ -653,9 +662,7 @@ export default function GroupPage() {
             ) : (
               messages.map((message, idx) => {
                 const type = getReqType(message.type, reqTypeMap);
-                const isMine =
-                  message.uid === user?.uid ||
-                  message.passenger_id === myPassengerId;
+                const isMine = message.uid === user?.uid;
                 const seatSlot = getSeatSlot(`${message.passenger_id}-${message.uid || ''}`);
                 const seatHint = passengerById[message.passenger_id]?.berth || seatSlot.toUpperCase();
                 const isAccepted =
@@ -714,7 +721,7 @@ export default function GroupPage() {
                           </button>
                         )}
                         {isMine && (
-                          <button className="action-chip" onClick={() => deleteMessage(message.id)}>
+                          <button className="action-chip" onClick={() => deleteMessage(message)}>
                             <Trash2 size={14} />
                             Delete
                           </button>

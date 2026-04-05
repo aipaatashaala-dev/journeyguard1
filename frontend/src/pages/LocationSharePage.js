@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import { db } from '../firebase';
-import { ref, onValue } from 'firebase/database';
 import { Shield, MapPin, Clock, ExternalLink } from 'lucide-react';
+import { getPublicLocation } from '../utils/api';
 
 export default function LocationSharePage() {
   const { token } = useParams();
@@ -12,48 +11,45 @@ export default function LocationSharePage() {
   const [lastUpdated, setLastUpdated] = useState(null);
 
   useEffect(() => {
-    // Decode signed token to get journey ID
-    let journeyId = token;
-    try {
-      const encoded = token.includes('.') ? token.split('.')[0] : token;
-      const normalized = encoded.replace(/-/g, '+').replace(/_/g, '/');
-      const padded = normalized + '='.repeat((4 - (normalized.length % 4)) % 4);
-      const decoded = JSON.parse(atob(padded));
-      journeyId = decoded.j;
-      const tokenAge = Date.now() - (decoded.t * 1000);
-      // Tokens older than 48 hours are expired (real expiry tied to journey end)
-      if (tokenAge > 48 * 60 * 60 * 1000) {
+    let active = true;
+
+    const loadLocation = async () => {
+      try {
+        const { data } = await getPublicLocation(token);
+        if (!active) return;
+
+        if (data?.expired) {
+          setExpired(true);
+          return;
+        }
+
+        setExpired(false);
+        if (data?.lat && data?.lng) {
+          setPosition({ lat: data.lat, lng: data.lng, accuracy: data.accuracy });
+          setLastUpdated(data.updated_at || Date.now());
+        } else {
+          setPosition(null);
+          setLastUpdated(data?.updated_at || null);
+        }
+
+        setJourneyInfo({
+          passengerId: data?.passenger_id,
+          trainNumber: data?.train_number,
+          journeyDate: data?.journey_date,
+        });
+      } catch (error) {
+        if (!active) return;
         setExpired(true);
-        return;
       }
-    } catch (e) {
-      // Token is raw journey ID
-    }
+    };
 
-    // Listen to location updates from Firebase
-    const locRef = ref(db, `locations/${journeyId}`);
-    const unsub = onValue(locRef, (snap) => {
-      const data = snap.val();
-      if (!data) return;
+    loadLocation();
+    const intervalId = window.setInterval(loadLocation, 15000);
 
-      if (data.expired) {
-        setExpired(true);
-        return;
-      }
-
-      if (data.lat && data.lng) {
-        setPosition({ lat: data.lat, lng: data.lng, accuracy: data.accuracy });
-        setLastUpdated(data.updated_at || Date.now());
-      }
-
-      setJourneyInfo({
-        passengerId: data.passenger_id,
-        trainNumber: data.train_number,
-        journeyDate: data.journey_date,
-      });
-    });
-
-    return () => unsub();
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, [token]);
 
   const timeAgo = (ts) => {

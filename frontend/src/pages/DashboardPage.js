@@ -3,8 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import { API_BASE_URL } from '../utils/config';
-import { db } from '../firebase';
-import { onValue, ref } from 'firebase/database';
+import { getCurrentJourneyCompat } from '../utils/api';
 import {
   ChevronRight,
   Ticket,
@@ -80,22 +79,52 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    if (!user?.uid || !currentJourney?.trainNumber || !currentJourney?.journeyDate) {
+    if (!user?.uid) {
       return undefined;
     }
 
-    const groupId = `${currentJourney.trainNumber}_${currentJourney.journeyDate}`;
-    const coachId = currentJourney.coach ? `coach_${currentJourney.coach}` : 'coach_general';
-    const membershipRef = ref(db, `train_groups/${groupId}/${coachId}/${user.uid}`);
+    let active = true;
 
-    const unsubscribe = onValue(membershipRef, (snapshot) => {
-      if (!snapshot.exists()) {
-        clearStoredJourney();
+    const syncCurrentJourney = async () => {
+      try {
+        const { data } = await getCurrentJourneyCompat();
+        if (!active) return;
+
+        const serverJourney = data?.journey;
+        if (!serverJourney) {
+          clearStoredJourney();
+          return;
+        }
+
+        const nextJourney = {
+          trainNumber: serverJourney.train_number,
+          journeyDate: serverJourney.journey_date,
+          coach: serverJourney.coach || serverJourney.coach_id?.replace('coach_', '') || 'general',
+          seat: serverJourney.berth || serverJourney.seat || '',
+        };
+
+        localStorage.setItem('jg_journey', JSON.stringify(nextJourney));
+        localStorage.setItem('jg_group_id', serverJourney.group_id || `${nextJourney.trainNumber}_${nextJourney.journeyDate}`);
+        localStorage.setItem('jg_coach_id', serverJourney.coach_id || `coach_${nextJourney.coach}`);
+        if (serverJourney.passenger_id) {
+          localStorage.setItem('jg_passenger_id', serverJourney.passenger_id);
+        }
+        setCurrentJourney(nextJourney);
+      } catch (error) {
+        if (!active) return;
+        if (error?.response?.status === 401) return;
+        console.error('Failed to sync current journey', error);
       }
-    });
+    };
 
-    return () => unsubscribe();
-  }, [user?.uid, currentJourney?.trainNumber, currentJourney?.journeyDate, currentJourney?.coach]);
+    syncCurrentJourney();
+    const intervalId = window.setInterval(syncCurrentJourney, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [user?.uid]);
 
   useEffect(() => {
     setManualTrainDetails(null);

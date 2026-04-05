@@ -13,7 +13,7 @@ export default function AuthPage() {
   const [loading, setLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [showPasswordSetup, setShowPasswordSetup] = useState(false);
-  const { register, login, loginWithGoogle, loginWithApple } = useAuth();
+  const { register, login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -25,8 +25,8 @@ export default function AuthPage() {
 
   const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
 
-  const getSocialSignInError = (provider, error) => {
-    const providerLabel = provider === 'google' ? 'Google' : 'Apple';
+  const getSocialSignInError = (error) => {
+    const providerLabel = 'Google';
     const code = error?.code || '';
 
     if (firebaseConfigLooksPlaceholder) {
@@ -123,10 +123,10 @@ export default function AuthPage() {
     setLoading(false);
   };
 
-  const handleSocialLogin = async (provider) => {
+  const handleSocialLogin = async () => {
     setLoading(true);
     try {
-      const result = provider === 'google' ? await loginWithGoogle() : await loginWithApple();
+      const result = await loginWithGoogle();
       const uid = result.user.uid;
       const email = result.user.email;
       const displayName = result.user.displayName || email.split('@')[0];
@@ -146,7 +146,7 @@ export default function AuthPage() {
         navigate('/dashboard');
       }
     } catch (e) {
-      toast.error(getSocialSignInError(provider, e), { duration: 6000 });
+      toast.error(getSocialSignInError(e), { duration: 6000 });
     }
     setLoading(false);
   };
@@ -270,21 +270,12 @@ export default function AuthPage() {
           <div style={{ display: 'grid', gap: '0.7rem', marginBottom: '1.15rem' }}>
             <button
               type="button"
-              onClick={() => handleSocialLogin('google')}
+              onClick={handleSocialLogin}
               disabled={loading}
               className="btn btn-secondary"
               style={{ width: '100%', justifyContent: 'center' }}
             >
               Continue with Google
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSocialLogin('apple')}
-              disabled={loading}
-              className="btn btn-secondary"
-              style={{ width: '100%', justifyContent: 'center' }}
-            >
-              Continue with Apple
             </button>
           </div>
 

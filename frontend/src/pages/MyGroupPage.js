@@ -1,11 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Users, ArrowLeft, TrainFront, DoorOpen, CalendarDays, MapPinned } from 'lucide-react';
-import { db } from '../firebase';
-import { ref, onValue } from 'firebase/database';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
-import { joinGroup, leaveGroup } from '../utils/api';
+import { getCurrentJourneyCompat, getJourneyGroup, joinGroup, leaveGroup } from '../utils/api';
 
 export default function MyGroupPage() {
   const { user } = useAuth();
@@ -18,55 +16,78 @@ export default function MyGroupPage() {
   useEffect(() => {
     if (!user?.uid) {
       setLoading(false);
-      return;
+      return undefined;
     }
 
-    const journeyData = JSON.parse(localStorage.getItem('jg_journey') || '{}');
     const previousJourney = JSON.parse(localStorage.getItem('jg_last_journey') || 'null');
     setLastJourney(previousJourney);
-    if (!journeyData.trainNumber || !journeyData.journeyDate || !journeyData.coach) {
-      setGroup(null);
-      setLoading(false);
-      return;
-    }
 
-    const groupId = `${journeyData.trainNumber}_${journeyData.journeyDate}`;
-    const coachId = `coach_${journeyData.coach}`;
-    const groupRef = ref(db, `train_groups/${groupId}/${coachId}`);
+    let active = true;
 
-    const unsubscribe = onValue(groupRef, (snapshot) => {
-      if (!snapshot.exists()) {
-        localStorage.removeItem('jg_journey');
-        localStorage.removeItem('jg_group_id');
-        localStorage.removeItem('jg_coach_id');
-        localStorage.removeItem('jg_passenger_id');
-        setGroup(null);
-        setLoading(false);
-        return;
-      }
+    const loadGroup = async () => {
+      try {
+        const { data } = await getCurrentJourneyCompat();
+        if (!active) return;
 
-      const members = [];
-      snapshot.forEach((child) => {
-        const data = child.val();
-        if (data?.passenger_id && child.key !== 'requests') {
-          members.push({ uid: child.key, ...data });
+        const journey = data?.journey;
+        if (!journey) {
+          localStorage.removeItem('jg_journey');
+          localStorage.removeItem('jg_group_id');
+          localStorage.removeItem('jg_coach_id');
+          localStorage.removeItem('jg_passenger_id');
+          setGroup(null);
+          setLoading(false);
+          return;
         }
-      });
 
-      setGroup({
-        id: `${groupId}/${coachId}`,
-        groupId,
-        coachId,
-        trainNumber: journeyData.trainNumber,
-        journeyDate: journeyData.journeyDate,
-        coach: journeyData.coach,
-        seat: journeyData.seat || journeyData.berth || '-',
-        members,
-      });
-      setLoading(false);
-    });
+        const coach = journey.coach || journey.coach_id?.replace('coach_', '') || 'general';
+        const currentJourney = {
+          trainNumber: journey.train_number,
+          journeyDate: journey.journey_date,
+          coach,
+          seat: journey.berth || journey.seat || '',
+        };
+        localStorage.setItem('jg_journey', JSON.stringify(currentJourney));
+        localStorage.setItem('jg_group_id', journey.group_id);
+        localStorage.setItem('jg_coach_id', journey.coach_id);
+        if (journey.passenger_id) {
+          localStorage.setItem('jg_passenger_id', journey.passenger_id);
+        }
 
-    return unsubscribe;
+        const groupRes = await getJourneyGroup(journey.group_id, journey.coach_id);
+        if (!active) return;
+
+        setGroup({
+          id: `${journey.group_id}/${journey.coach_id}`,
+          groupId: journey.group_id,
+          coachId: journey.coach_id,
+          trainNumber: currentJourney.trainNumber,
+          journeyDate: currentJourney.journeyDate,
+          coach: currentJourney.coach,
+          seat: currentJourney.seat || '-',
+          members: groupRes.data?.passengers || [],
+        });
+      } catch (error) {
+        if (!active) return;
+        if ([403, 404].includes(error?.response?.status)) {
+          setGroup(null);
+        } else {
+          console.error('Failed to load active group', error);
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    };
+
+    loadGroup();
+    const intervalId = window.setInterval(loadGroup, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
   }, [user?.uid]);
 
   const handleLeaveGroup = async () => {

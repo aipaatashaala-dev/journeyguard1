@@ -41,7 +41,7 @@ allow_origins = list(
             "https://www.journeyguard.in",
             "https://journeyguard.web.app",
             "https://journeyguard.firebaseapp.com",
-            "https://journeyguard1-1.onrender.com"
+            "https://journeyguard1-1.onrender.com",
             *extra_cors_origins,
         ]
     )

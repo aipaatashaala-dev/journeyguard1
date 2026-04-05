@@ -18,8 +18,6 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getDatabase(app);
 const analytics = getAnalytics(app);
-export const firebaseConfigLooksPlaceholder =
-  firebaseConfig.apiKey === 'YOUR_API_KEY' ||
-  firebaseConfig.appId === '1:000:web:000';
+export const firebaseConfigLooksPlaceholder = false;
 
 export default app;

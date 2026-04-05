@@ -24,6 +24,10 @@ def _coach_id(coach: str) -> str:
     return f"coach_{coach}"
 
 
+def _current_user_journey(uid: str) -> dict:
+    return fb_db.reference(f"user_journeys/{uid}").get() or {}
+
+
 def _safe_int(value) -> int | None:
     try:
         return int(value)
@@ -406,6 +410,33 @@ async def fetch_train_info(
         raise HTTPException(status_code=500, detail=f"Could not fetch train details: {str(exc)}")
 
 
+@router.get("/current")
+async def get_current_journey(user: dict = Depends(get_current_user)):
+    uid = user["uid"]
+    journey = _current_user_journey(uid)
+    if not journey:
+        return {"journey": None}
+
+    group_id = journey.get("group_id")
+    coach_id = journey.get("coach_id")
+    if not group_id or not coach_id:
+        return {"journey": None}
+
+    membership = fb_db.reference(f"train_groups/{group_id}/{coach_id}/{uid}").get()
+    if not membership:
+        fb_db.reference(f"user_journeys/{uid}").delete()
+        return {"journey": None}
+
+    return {
+        "journey": {
+            **journey,
+            "group_id": group_id,
+            "coach_id": coach_id,
+            "seat": journey.get("berth", ""),
+        }
+    }
+
+
 def _delete_group_and_chats(group_id: str):
     """Delete group and all associated chats after journey completion"""
     try:
@@ -600,7 +631,13 @@ async def complete_journey(journey_id: str, user: dict = Depends(get_current_use
 
 
 @router.get("/{journey_id}/coach/{coach_id}")
-async def get_coach_group(journey_id: str, coach_id: str, _: dict = Depends(get_current_user)):
+async def get_coach_group(journey_id: str, coach_id: str, user: dict = Depends(get_current_user)):
+    journey = _current_user_journey(user["uid"])
+    if not journey:
+        raise HTTPException(status_code=404, detail="No active journey")
+    if journey.get("group_id") != journey_id or journey.get("coach_id") != coach_id:
+        raise HTTPException(status_code=403, detail="Not your coach group")
+
     _ensure_group_monitor(journey_id)
     data = fb_db.reference(f"train_groups/{journey_id}/{coach_id}").get() or {}
     passengers = [

@@ -120,15 +120,32 @@ class ClaimBerthRequest(BaseModel):
 class AssistanceRequestCreate(BaseModel):
     journey_id: str
     coach_id: str
-    request_type: str          # MEDICAL | FOOD | BERTH | EMERGENCY
+    request_type: str
+    message: Optional[str] = None
+    location_link: Optional[str] = None
+    google_maps_url: Optional[str] = None
+    expires_at: Optional[int] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy: Optional[float] = None
 
     @field_validator("request_type")
     @classmethod
     def valid_type(cls, v):
-        allowed = {"MEDICAL", "FOOD", "BERTH", "EMERGENCY"}
+        allowed = {"MEDICAL", "FOOD", "FOOD_NEED", "FOOD_HAS", "BERTH", "EMERGENCY", "LOCATION", "CHAT"}
         if v.upper() not in allowed:
             raise ValueError(f"request_type must be one of {allowed}")
         return v.upper()
+
+
+class AssistanceRequestUpdate(BaseModel):
+    message: Optional[str] = None
+    location_link: Optional[str] = None
+    google_maps_url: Optional[str] = None
+    expires_at: Optional[int] = None
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    accuracy: Optional[float] = None
 
 
 class StartLocationRequest(BaseModel):

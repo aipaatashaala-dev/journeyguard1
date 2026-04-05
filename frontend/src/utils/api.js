@@ -103,9 +103,3 @@ export const stopProtection = () =>
   api.post('/protection/stop');
 export const updateProtectionLocation = (data) =>
   api.post('/protection/location', data);
-
-// ---------- AI ----------
-export const getPrivateAiThread = (journeyId, coachId) =>
-  api.get('/ai/group-thread', { params: { journey_id: journeyId, coach_id: coachId } });
-export const sendPrivateAiMessage = (data) =>
-  api.post('/ai/group-chat', data);

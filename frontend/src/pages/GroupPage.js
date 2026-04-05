@@ -10,7 +10,6 @@ import {
   UtensilsCrossed,
   BedDouble,
   MessageSquare,
-  Bot,
   CheckCircle2,
   Users,
   MapPin,
@@ -24,8 +23,6 @@ import {
   getJourneyGroup,
   getRequests,
   sendRequest,
-  getPrivateAiThread,
-  sendPrivateAiMessage,
   startLocationTracking,
   stopLocationTracking,
   updateLocation,
@@ -41,7 +38,6 @@ const REQ_TYPES = [
   { id: 'FOOD_HAS', label: 'Can share food', icon: <UtensilsCrossed size={14} />, color: 'var(--success)' },
   { id: 'BERTH', label: 'Berth exchange', icon: <BedDouble size={14} />, color: 'var(--accent2)' },
   { id: 'LOCATION', label: 'Live location', icon: <MapPin size={14} />, color: 'var(--accent)' },
-  { id: 'AI', label: 'Ask AI privately', icon: <Bot size={14} />, color: '#9ad1ff' },
   { id: 'SYSTEM', label: 'Journey update', icon: <TrainFront size={14} />, color: '#3657c8' },
   { id: 'CHAT', label: 'Message', icon: <MessageSquare size={14} />, color: 'var(--text2)' },
 ];
@@ -61,14 +57,8 @@ export default function GroupPage() {
   const [locationMessageId, setLocationMessageId] = useState('');
   const [currentLocation, setCurrentLocation] = useState(null);
   const [trainInfo, setTrainInfo] = useState(null);
-  const [aiMessages, setAiMessages] = useState([]);
-  const [aiMessageText, setAiMessageText] = useState('');
-  const [aiSending, setAiSending] = useState(false);
   const lastMessageIdRef = useRef(null);
   const bottomRef = useRef(null);
-  const aiBottomRef = useRef(null);
-  const aiPanelRef = useRef(null);
-  const aiInputRef = useRef(null);
   const watchRef = useRef(null);
   const intervalRef = useRef(null);
   const timeoutRef = useRef(null);
@@ -124,33 +114,6 @@ export default function GroupPage() {
 
     loadTrainInfo();
   }, [user, trainNumber, journeyData?.journeyDate]);
-
-  useEffect(() => {
-    if (!user || !journeyId || !coachId) return;
-
-    let active = true;
-
-    const loadAiThread = async () => {
-      try {
-        const { data } = await getPrivateAiThread(journeyId, coachId);
-        if (active) {
-          setAiMessages(data?.messages || []);
-        }
-      } catch {
-        if (active) {
-          setAiMessages([]);
-        }
-      }
-    };
-
-    loadAiThread();
-    const intervalId = window.setInterval(loadAiThread, 15000);
-
-    return () => {
-      active = false;
-      window.clearInterval(intervalId);
-    };
-  }, [user, journeyId, coachId]);
 
   useEffect(() => {
     if (!user || !journeyId || !coachId) return undefined;
@@ -233,69 +196,16 @@ export default function GroupPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  useEffect(() => {
-    aiBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [aiMessages]);
-
   useEffect(() => () => {
     if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current);
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
 
-  const focusAiPanel = () => {
-    aiPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    window.setTimeout(() => {
-      aiInputRef.current?.focus();
-    }, 150);
-  };
-
-  const sendAiMessage = async (overrideMessage) => {
-    const text = (overrideMessage ?? aiMessageText).replace(/^@ai\s+/i, '').trim();
-    if (!text) {
-      toast.error('Enter a question for JourneyGuard AI');
-      return;
-    }
-
-    setAiSending(true);
-    try {
-      const { data } = await sendPrivateAiMessage({
-        journey_id: journeyId,
-        coach_id: coachId,
-        message: text,
-        train_number: trainNumber,
-        journey_date: journeyData?.journeyDate || null,
-        train_name: trainInfo?.train_name || journeyData?.trainName || null,
-        from_station: trainInfo?.from_station || journeyData?.fromStation || null,
-        to_station: trainInfo?.to_station || journeyData?.toStation || null,
-        current_station: trainInfo?.current_station || null,
-        next_station_name: trainInfo?.next_station_name || null,
-        expected_arrival: trainInfo?.expected_arrival || trainInfo?.arrival || null,
-        speed: trainInfo?.speed || null,
-      });
-
-      setAiMessages(data?.messages || []);
-      setAiMessageText('');
-      setSelectedReq(null);
-      setMessageText('');
-      setReplyTo(null);
-      toast.success('Private AI reply ready for you');
-    } catch (error) {
-      toast.error(error?.response?.data?.detail || 'AI could not reply right now');
-    } finally {
-      setAiSending(false);
-    }
-  };
-
   const sendMessage = async (overrideMessage) => {
     const text = (overrideMessage ?? messageText).trim();
     if (!text) {
       toast.error('Enter a message');
-      return;
-    }
-
-    if (selectedReq === 'AI' || text.toLowerCase().startsWith('@ai ')) {
-      await sendAiMessage(text);
       return;
     }
 
@@ -528,92 +438,6 @@ export default function GroupPage() {
           </div>
         )}
 
-        <div ref={aiPanelRef} className="card" style={{ padding: '1rem', display: 'grid', gap: '1rem' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'flex-start', flexWrap: 'wrap' }}>
-            <div>
-              <h2 style={{ marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Bot size={18} color="#2563eb" />
-                JourneyGuard AI
-              </h2>
-              <div style={{ color: 'var(--text2)', lineHeight: 1.7, maxWidth: 760 }}>
-                This AI conversation is private to you. Other passengers in the coach cannot see your AI questions or AI replies.
-                If you ask for berth change help, AI will try to suggest the right people from the current coach and draft a polite request.
-              </div>
-            </div>
-            <div className="action-chip" style={{ cursor: 'default', color: '#1d4ed8' }}>
-              <Bot size={14} />
-              Private to you
-            </div>
-          </div>
-
-          <div className="glass-card" style={{ padding: '1rem', minHeight: 220, maxHeight: 340, overflowY: 'auto', display: 'grid', gap: '0.75rem' }}>
-            {aiMessages.length === 0 ? (
-              <div style={{ color: 'var(--text2)', lineHeight: 1.8 }}>
-                Ask anything about your journey, berth exchange, stations, train timing, or nearby help.
-                Example: <strong style={{ color: 'var(--text)' }}>Can you help me find someone for berth change from berth 28?</strong>
-              </div>
-            ) : (
-              aiMessages.map((item) => (
-                <div
-                  key={item.id}
-                  style={{
-                    justifySelf: item.role === 'assistant' ? 'stretch' : 'end',
-                    maxWidth: item.role === 'assistant' ? '100%' : '82%',
-                    padding: '0.9rem 1rem',
-                    borderRadius: 18,
-                    background: item.role === 'assistant' ? 'rgba(37,99,235,0.08)' : 'rgba(233,116,24,0.1)',
-                    border: item.role === 'assistant'
-                      ? '1px solid rgba(37,99,235,0.16)'
-                      : '1px solid rgba(233,116,24,0.18)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', alignItems: 'center', marginBottom: '0.45rem', flexWrap: 'wrap' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <strong>{item.sender_label || (item.role === 'assistant' ? 'JourneyGuard AI' : 'You')}</strong>
-                      <span className="badge" style={{ background: item.role === 'assistant' ? 'rgba(37,99,235,0.12)' : 'rgba(233,116,24,0.14)', color: item.role === 'assistant' ? '#1d4ed8' : 'var(--accent)' }}>
-                        {item.role === 'assistant' ? 'AI reply' : 'Your question'}
-                      </span>
-                    </div>
-                    <span style={{ color: 'var(--text3)', fontSize: '0.78rem' }}>
-                      {formatMessageTime(item.timestamp)}
-                    </span>
-                  </div>
-                  <div style={{ color: '#111827', lineHeight: 1.75, whiteSpace: 'pre-wrap' }}>
-                    {renderMessageBody(item.content)}
-                  </div>
-                </div>
-              ))
-            )}
-            <div ref={aiBottomRef} />
-          </div>
-
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <input
-              ref={aiInputRef}
-              className="input"
-              type="text"
-              value={aiMessageText}
-              onChange={(e) => setAiMessageText(e.target.value)}
-              placeholder="Ask AI privately, for example: help me find the right person for berth change"
-              style={{ flex: 1, minWidth: 260 }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  sendAiMessage();
-                }
-              }}
-            />
-            <button
-              onClick={() => sendAiMessage()}
-              className="btn btn-primary"
-              disabled={!aiMessageText.trim() || aiSending}
-              style={{ minWidth: 170, justifyContent: 'center' }}
-            >
-              {aiSending ? <span className="spinner" /> : <><Bot size={16} /> Ask AI Privately</>}
-            </button>
-          </div>
-        </div>
-
         <div className="card coach-chat-shell" style={{ padding: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
             <div>
@@ -710,12 +534,12 @@ export default function GroupPage() {
                       )}
 
                       <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginTop: '0.8rem' }}>
-                        {!isMine && !isAccepted && !['AI', 'SYSTEM'].includes(type.id) && (
+                        {!isMine && !isAccepted && type.id !== 'SYSTEM' && (
                           <button className="action-chip" onClick={() => setReplyTo(message)}>
                             Reply
                           </button>
                         )}
-                        {type.id !== 'CHAT' && !['AI', 'SYSTEM'].includes(type.id) && !isMine && !isAccepted && (
+                        {type.id !== 'CHAT' && type.id !== 'SYSTEM' && !isMine && !isAccepted && (
                           <button className="action-chip" onClick={() => sendAcceptedReply(message.message || type.label)}>
                             Accept request
                           </button>
@@ -763,24 +587,10 @@ export default function GroupPage() {
                       }
                       return;
                     }
-                    if (type.id === 'AI') {
-                      setSelectedReq('AI');
-                      setMessageText('');
-                      focusAiPanel();
-                      toast('AI chat is private and visible only to you');
-                      return;
-                    }
                     setSelectedReq(type.id);
                     setMessageText(type.label);
                   }}
-                  style={type.id === 'AI'
-                    ? {
-                        color: '#ffffff',
-                        background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
-                        borderColor: 'rgba(29, 78, 216, 0.85)',
-                        boxShadow: '0 10px 24px rgba(37, 99, 235, 0.22)',
-                      }
-                    : { color: type.color }}
+                  style={{ color: type.color }}
                 >
                   {type.icon}
                   {type.id === 'LOCATION' ? (sharingLocation ? 'Stop location' : type.label) : type.label}
@@ -792,13 +602,7 @@ export default function GroupPage() {
               type="text"
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder={
-                selectedReq === 'AI'
-                  ? 'AI mode is private. Type here with @ai or use the private AI box above.'
-                  : selectedReq
-                    ? `Add context for ${getReqType(selectedReq, reqTypeMap).label.toLowerCase()}`
-                    : 'Type a message to your coach'
-              }
+              placeholder={selectedReq ? `Add context for ${getReqType(selectedReq, reqTypeMap).label.toLowerCase()}` : 'Type a message to your coach'}
               style={{ flex: 1, minWidth: 220 }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {

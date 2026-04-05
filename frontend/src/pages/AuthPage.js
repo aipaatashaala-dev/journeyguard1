@@ -6,6 +6,17 @@ import { Shield, Mail, Lock, Eye, EyeOff, TrainFront, Ticket, ArrowRight } from 
 import { db, firebaseConfigLooksPlaceholder } from '../firebase';
 import { ref, set, get } from 'firebase/database';
 
+function GoogleLogo() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+      <path fill="#EA4335" d="M9 7.364v3.709h5.16c-.227 1.193-.907 2.204-1.933 2.884l3.127 2.427c1.822-1.678 2.873-4.147 2.873-7.091 0-.68-.061-1.335-.174-1.929H9z" />
+      <path fill="#34A853" d="M9 18c2.61 0 4.798-.865 6.398-2.34l-3.127-2.427c-.865.58-1.97.924-3.271.924-2.51 0-4.633-1.694-5.392-3.972H.376v2.503A8.998 8.998 0 0 0 9 18z" />
+      <path fill="#4A90E2" d="M3.608 10.185A5.41 5.41 0 0 1 3.306 8.4c0-.62.106-1.224.302-1.785V4.112H.376A8.997 8.997 0 0 0 0 8.4c0 1.452.347 2.827.376 4.288l3.232-2.503z" />
+      <path fill="#FBBC05" d="M9 3.578c1.42 0 2.694.489 3.698 1.451l2.775-2.776C13.794.689 11.61 0 9 0A8.998 8.998 0 0 0 .376 4.112l3.232 2.503C4.367 4.337 6.49 3.578 9 3.578z" />
+    </svg>
+  );
+}
+
 export default function AuthPage() {
   const location = useLocation();
   const [mode, setMode] = useState('login');
@@ -273,8 +284,11 @@ export default function AuthPage() {
               onClick={handleSocialLogin}
               disabled={loading}
               className="btn btn-secondary"
-              style={{ width: '100%', justifyContent: 'center' }}
+              style={{ width: '100%', justifyContent: 'center', gap: '0.7rem', background: '#fff', color: '#111827', borderColor: 'rgba(17,24,39,0.12)' }}
             >
+              <span style={{ width: 22, height: 22, borderRadius: 999, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', background: '#fff' }}>
+                <GoogleLogo />
+              </span>
               Continue with Google
             </button>
           </div>

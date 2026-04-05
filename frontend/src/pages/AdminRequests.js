@@ -12,7 +12,6 @@ const REQ_TYPES = [
   { id: 'FOOD_HAS', label: 'Food Available', color: 'var(--success)' },
   { id: 'BERTH', label: 'Berth Exchange', color: 'var(--accent2)' },
   { id: 'EMERGENCY', label: 'Emergency Alert', color: 'var(--danger)' },
-  { id: 'AI', label: 'AI Message', color: '#3657c8' },
   { id: 'SYSTEM', label: 'Journey Update', color: '#3657c8' },
 ];
 

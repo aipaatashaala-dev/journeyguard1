@@ -34,7 +34,7 @@ import {
   DEFAULT_GEOLOCATION_OPTIONS,
   getGeolocationErrorMessage,
   getGeolocationUnavailableMessage,
-  requestCurrentPosition,
+  requestGeolocationPermission,
 } from '../utils/geolocation';
 import { resolveTrackingLink } from '../utils/locationLinks';
 import './GroupPage.css';
@@ -304,7 +304,9 @@ export default function GroupPage() {
     let createdRequestId = '';
 
     try {
-      const initialPosition = await requestCurrentPosition(DEFAULT_GEOLOCATION_OPTIONS);
+      const initialPosition = await requestGeolocationPermission(
+        DEFAULT_GEOLOCATION_OPTIONS
+      );
 
       setSharingLocation(true);
       lastCoordsRef.current = null;

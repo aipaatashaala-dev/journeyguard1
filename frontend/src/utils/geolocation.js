@@ -1,4 +1,5 @@
 const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1']);
+const GEOLOCATION_PERMISSION_NAME = 'geolocation';
 
 export const DEFAULT_GEOLOCATION_OPTIONS = {
   enableHighAccuracy: true,
@@ -12,6 +13,13 @@ const hasCapacitorRuntime = () =>
 
 const isLocalhostHostname = (hostname = '') =>
   LOCAL_HOSTNAMES.has(hostname) || hostname.endsWith('.localhost');
+
+const canUsePermissionsApi = () =>
+  typeof navigator !== 'undefined' &&
+  typeof navigator.permissions?.query === 'function';
+
+export const getGeolocationPermissionBlockedMessage = () =>
+  'Location access is blocked for this site. Allow location access in your browser site settings, then try again.';
 
 export const hasSecureGeolocationContext = () => {
   if (typeof window === 'undefined') return true;
@@ -31,13 +39,49 @@ export const getGeolocationUnavailableMessage = () => {
   return '';
 };
 
+export const getGeolocationPermissionState = async () => {
+  if (!canUsePermissionsApi()) return 'unsupported';
+
+  try {
+    const permissionStatus = await navigator.permissions.query({
+      name: GEOLOCATION_PERMISSION_NAME,
+    });
+    return permissionStatus?.state || 'unsupported';
+  } catch {
+    return 'unsupported';
+  }
+};
+
+export const watchGeolocationPermission = async (onChange) => {
+  if (!canUsePermissionsApi()) return () => {};
+
+  try {
+    const permissionStatus = await navigator.permissions.query({
+      name: GEOLOCATION_PERMISSION_NAME,
+    });
+    const handleChange = () => onChange(permissionStatus?.state || 'unsupported');
+
+    if (typeof permissionStatus.addEventListener === 'function') {
+      permissionStatus.addEventListener('change', handleChange);
+      return () => permissionStatus.removeEventListener('change', handleChange);
+    }
+
+    permissionStatus.onchange = handleChange;
+    return () => {
+      permissionStatus.onchange = null;
+    };
+  } catch {
+    return () => {};
+  }
+};
+
 export const getGeolocationErrorMessage = (error) => {
   const unavailableMessage = getGeolocationUnavailableMessage();
   if (unavailableMessage) return unavailableMessage;
 
   switch (error?.code) {
     case 1:
-      return 'Location access was blocked. Allow geolocation permission in your browser settings and try again.';
+      return getGeolocationPermissionBlockedMessage();
     case 2:
       return 'Your location is unavailable right now. Check GPS/network access and try again.';
     case 3:
@@ -61,3 +105,15 @@ export const requestCurrentPosition = (options = DEFAULT_GEOLOCATION_OPTIONS) =>
       options
     );
   });
+
+export const requestGeolocationPermission = async (
+  options = DEFAULT_GEOLOCATION_OPTIONS
+) => {
+  const permissionState = await getGeolocationPermissionState();
+
+  if (permissionState === 'denied') {
+    throw new Error(getGeolocationPermissionBlockedMessage());
+  }
+
+  return requestCurrentPosition(options);
+};

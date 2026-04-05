@@ -4,17 +4,31 @@ import {
   DEFAULT_GEOLOCATION_OPTIONS,
   getGeolocationErrorMessage,
   getGeolocationUnavailableMessage,
+  watchGeolocationPermission,
 } from '../utils/geolocation';
 
 export function useLocationTracker(journeyId, isActive) {
   const [position, setPosition] = useState(null);
   const [error, setError] = useState(null);
   const [accuracy, setAccuracy] = useState(null);
+  const [restartKey, setRestartKey] = useState(0);
   const watchRef = useRef(null);
   const intervalRef = useRef(null);
   const lastSentRef = useRef(null);
   const latestPositionRef = useRef(null);
   const latestAccuracyRef = useRef(null);
+
+  const clearTracking = useCallback(() => {
+    if (watchRef.current && typeof navigator !== 'undefined' && navigator.geolocation) {
+      navigator.geolocation.clearWatch(watchRef.current);
+      watchRef.current = null;
+    }
+
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }, []);
 
   const sendLocation = useCallback(async (lat, lng, acc) => {
     if (!journeyId || !isActive) return;
@@ -31,19 +45,29 @@ export function useLocationTracker(journeyId, isActive) {
     latestAccuracyRef.current = accuracy;
   }, [position, accuracy]);
 
+  const retryTracking = useCallback(() => {
+    setError(null);
+    setRestartKey((value) => value + 1);
+  }, []);
+
   useEffect(() => {
+    let disposed = false;
+    let detachPermissionListener = () => {};
+
     if (!isActive) {
-      if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current);
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      clearTracking();
       setError(null);
-      return;
+      return undefined;
     }
 
     const unavailableMessage = getGeolocationUnavailableMessage();
     if (unavailableMessage) {
+      clearTracking();
       setError(unavailableMessage);
-      return;
+      return undefined;
     }
+
+    clearTracking();
 
     watchRef.current = navigator.geolocation.watchPosition(
       (pos) => {
@@ -58,7 +82,12 @@ export function useLocationTracker(journeyId, isActive) {
           sendLocation(latitude, longitude, acc);
         }
       },
-      (err) => setError(getGeolocationErrorMessage(err)),
+      (err) => {
+        if (err?.code === 1) {
+          clearTracking();
+        }
+        setError(getGeolocationErrorMessage(err));
+      },
       DEFAULT_GEOLOCATION_OPTIONS
     );
 
@@ -73,11 +102,33 @@ export function useLocationTracker(journeyId, isActive) {
       }
     }, 60000);
 
-    return () => {
-      if (watchRef.current) navigator.geolocation.clearWatch(watchRef.current);
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isActive, sendLocation]);
+    watchGeolocationPermission((permissionState) => {
+      if (disposed) return;
 
-  return { position, error, accuracy };
+      if (permissionState === 'granted') {
+        setError(null);
+        setRestartKey((value) => value + 1);
+        return;
+      }
+
+      if (permissionState === 'denied') {
+        clearTracking();
+        setError(getGeolocationErrorMessage({ code: 1 }));
+      }
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+        return;
+      }
+      detachPermissionListener = cleanup;
+    });
+
+    return () => {
+      disposed = true;
+      detachPermissionListener();
+      clearTracking();
+    };
+  }, [clearTracking, isActive, sendLocation, restartKey]);
+
+  return { position, error, accuracy, retryTracking };
 }

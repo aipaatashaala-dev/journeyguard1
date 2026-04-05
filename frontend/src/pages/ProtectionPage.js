@@ -14,7 +14,7 @@ import {
 import {
   DEFAULT_GEOLOCATION_OPTIONS,
   getGeolocationUnavailableMessage,
-  requestCurrentPosition,
+  requestGeolocationPermission,
 } from '../utils/geolocation';
 import { resolveTrackingLink } from '../utils/locationLinks';
 import toast from 'react-hot-toast';
@@ -145,10 +145,18 @@ export default function ProtectionPage() {
       });
   }, [journeyId, locationSharingOn]);
 
-  const { position, error: locationError, accuracy } = useLocationTracker(
+  const { position, error: locationError, accuracy, retryTracking } = useLocationTracker(
     journeyId,
     locationSharingOn
   );
+
+  const requestLocationAccess = useCallback(async () => {
+    const grantedPosition = await requestGeolocationPermission(
+      DEFAULT_GEOLOCATION_OPTIONS
+    );
+    retryTracking();
+    return grantedPosition;
+  }, [retryTracking]);
 
   useEffect(() => {
     if (!locationSharingOn || !position) return;
@@ -224,7 +232,7 @@ export default function ProtectionPage() {
           throw new Error(unavailableMessage);
         }
 
-        const initialPosition = await requestCurrentPosition(DEFAULT_GEOLOCATION_OPTIONS);
+        const initialPosition = await requestLocationAccess();
         const initialCoords = {
           lat: initialPosition.coords.latitude,
           lng: initialPosition.coords.longitude,
@@ -314,6 +322,26 @@ export default function ProtectionPage() {
         error?.response?.data?.detail ||
           error?.message ||
           'Could not update mobile live location'
+      );
+    } finally {
+      setSavingState(false);
+    }
+  };
+
+  const handleRequestLocationPermission = async () => {
+    setSavingState(true);
+    try {
+      await requestLocationAccess();
+      toast.success(
+        locationSharingOn
+          ? 'Location permission updated. Live tracking will retry now.'
+          : 'Location permission allowed. You can start live location now.'
+      );
+    } catch (error) {
+      toast.error(
+        error?.response?.data?.detail ||
+          error?.message ||
+          'Could not request location permission'
       );
     } finally {
       setSavingState(false);
@@ -451,7 +479,15 @@ export default function ProtectionPage() {
 
             {locationError && (
               <div className="field-card" style={{ borderColor: 'rgba(223,79,104,0.22)', color: 'var(--danger)' }}>
-                {locationError}
+                <div style={{ marginBottom: '0.8rem' }}>{locationError}</div>
+                <button
+                  type="button"
+                  onClick={handleRequestLocationPermission}
+                  className="btn btn-secondary"
+                  disabled={savingState}
+                >
+                  Ask for location permission
+                </button>
               </div>
             )}
 

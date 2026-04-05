@@ -16,7 +16,7 @@ import os
 load_dotenv(override=True)
 
 from dependencies import get_firebase_app
-from routers import auth, journey, requests as req_router, pnr, location, protection, ai, admin
+from routers import auth, journey, requests as req_router, pnr, location, protection, admin
 
 try:
     get_firebase_app()
@@ -70,7 +70,6 @@ app.include_router(journey.router, prefix="/journey", tags=["Journey"])
 app.include_router(req_router.router, prefix="/requests", tags=["Requests"])
 app.include_router(location.router, prefix="/location", tags=["Location"])
 app.include_router(protection.router, prefix="/protection", tags=["Protection"])
-app.include_router(ai.router, prefix="/ai", tags=["AI"])
 app.include_router(admin.router)
 
 

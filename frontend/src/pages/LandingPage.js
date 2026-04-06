@@ -21,15 +21,15 @@ const features = [
   },
   {
     icon: <Ticket size={22} />,
-    title: 'PNR To Coach Group',
-    desc: 'Enter a PNR, confirm your berth, and land inside the right compartment conversation.',
+    title: 'PNR To Train Group',
+    desc: 'Enter a PNR, confirm your berth, and land inside the shared train conversation.',
     color: 'var(--rail-gold)',
     bg: 'var(--rail-gold-dim)',
   },
   {
     icon: <Users size={22} />,
-    title: 'Coach-Level Support',
-    desc: 'Trade berths, ask for food help, or escalate a medical issue with nearby travelers.',
+    title: 'Train-Wide Support',
+    desc: 'Trade berths, ask for food help, or escalate a medical issue across coaches and general passengers.',
     color: 'var(--accent2)',
     bg: 'var(--accent2-dim)',
   },
@@ -43,7 +43,7 @@ const features = [
 ];
 
 const stats = [
-  ['Coach-first', 'Built around real coach groups'],
+  ['Train-wide', 'One group for the whole train'],
   ['Anonymous', 'Passenger IDs instead of personal details'],
   ['Live', 'Requests and location updates'],
   ['Night-ready', 'Protection designed for sleeper travel'],

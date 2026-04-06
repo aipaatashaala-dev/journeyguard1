@@ -32,6 +32,7 @@ const readStoredJourneySnapshot = () => {
       group_id: groupId,
       coach_id: coachId,
       train_number: stored.trainNumber,
+      train_name: stored.trainName || '',
       journey_date: stored.journeyDate,
       coach,
       berth: stored.seat || stored.berth || '',

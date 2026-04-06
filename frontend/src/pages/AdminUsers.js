@@ -107,7 +107,9 @@ export default function AdminUsers() {
                             <span className="action-chip" style={{ cursor: 'default' }}>Group {item.active_group_id}</span>
                           )}
                           {item.active_coach_id && (
-                            <span className="action-chip" style={{ cursor: 'default' }}>{item.active_coach_id}</span>
+                            <span className="action-chip" style={{ cursor: 'default' }}>
+                              {item.active_coach_id === 'train_chat' ? 'Train-wide chat' : item.active_coach_id}
+                            </span>
                           )}
                         </div>
                       )}

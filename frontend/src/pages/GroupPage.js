@@ -36,6 +36,7 @@ import {
   getGeolocationUnavailableMessage,
   requestGeolocationPermission,
 } from '../utils/geolocation';
+import { formatTrainGroupName } from '../utils/groupNames';
 import { resolveTrackingLink } from '../utils/locationLinks';
 import './GroupPage.css';
 
@@ -75,6 +76,7 @@ export default function GroupPage() {
   const journeyData = JSON.parse(localStorage.getItem('jg_journey') || '{}');
   const myPassengerId = storedPassengerId || journeyData.passengerId || `Passenger-${user?.uid?.slice(-4) || 'guest'}`;
   const trainNumber = journeyId?.split('_')[0];
+  const groupName = formatTrainGroupName(trainInfo?.train_name || journeyData?.trainName, trainNumber);
   const clearStoredJourney = () => {
     localStorage.removeItem('jg_journey');
     localStorage.removeItem('jg_group_id');
@@ -86,10 +88,10 @@ export default function GroupPage() {
     () => Object.fromEntries(REQ_TYPES.map((item) => [item.id, item])),
     []
   );
-  const passengerById = useMemo(() => {
+  const passengerByUid = useMemo(() => {
     const map = {};
     passengers.forEach((p) => {
-      if (p?.passenger_id) map[p.passenger_id] = p;
+      if (p?.uid) map[p.uid] = p;
     });
     return map;
   }, [passengers]);
@@ -113,9 +115,16 @@ export default function GroupPage() {
         const data = await res.json().catch(() => ({}));
         if (res.ok) {
           setTrainInfo(data);
+          const storedJourney = JSON.parse(localStorage.getItem('jg_journey') || '{}');
+          if (data.train_name && storedJourney?.trainNumber && storedJourney?.journeyDate) {
+            localStorage.setItem('jg_journey', JSON.stringify({
+              ...storedJourney,
+              trainName: data.train_name,
+            }));
+          }
         }
       } catch {
-        // Keep the coach chat usable even if train metadata fetch fails.
+        // Keep the train chat usable even if train metadata fetch fails.
       }
     };
 
@@ -146,13 +155,13 @@ export default function GroupPage() {
         if (!active) return;
 
         if (!journeyDataResp?.journey) {
-          handleGroupUnavailable('This coach group is no longer active.');
+          handleGroupUnavailable('This train group is no longer active.');
           return;
         }
 
         const memberList = groupData?.passengers || [];
         if (!memberList.some((passenger) => passenger.uid === user?.uid)) {
-          handleGroupUnavailable('You are no longer part of this coach group.');
+          handleGroupUnavailable('You are no longer part of this train group.');
           return;
         }
 
@@ -169,7 +178,7 @@ export default function GroupPage() {
           if ('Notification' in window && Notification.permission === 'granted') {
             const latest = activeMessages[activeMessages.length - 1];
             const rt = getReqType(latest.type, reqTypeMap);
-            new Notification(`New update in coach ${coachId?.replace('coach_', '')}`, {
+            new Notification('New update in your train group', {
               body: `${latest.passenger_id}: ${latest.message || rt.label}`,
               icon: '/favicon.ico',
             });
@@ -183,7 +192,7 @@ export default function GroupPage() {
         if (!active) return;
         const status = error?.response?.status;
         if (status === 403 || status === 404) {
-          handleGroupUnavailable('This coach group is no longer available.');
+          handleGroupUnavailable('This train group is no longer available.');
           return;
         }
         console.error('Failed to sync coach data', error);
@@ -232,7 +241,7 @@ export default function GroupPage() {
       setSelectedReq(null);
       setMessageText('');
       setReplyTo(null);
-      toast.success('Sent to your coach group');
+      toast.success('Sent to the train group');
     } catch (error) {
       toast.error(error?.response?.data?.detail || 'Could not send your message');
     } finally {
@@ -386,7 +395,7 @@ export default function GroupPage() {
         stopLocationShare(false).catch(() => {});
       }, 60 * 60 * 1000);
 
-      toast.success('Live location shared in the coach group');
+      toast.success('Live location shared in the train group');
     } catch (error) {
       if (watchRef.current) {
         navigator.geolocation.clearWatch(watchRef.current);
@@ -441,11 +450,14 @@ export default function GroupPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <div>
                 <h1 style={{ fontSize: 'clamp(1.15rem, 3vw, 1.6rem)', marginBottom: '0.2rem' }}>
-                  {coachId?.replace('coach_', '').toUpperCase()} Group
+                  {groupName}
                 </h1>
                 <div style={{ color: 'var(--text2)', fontSize: '0.9rem' }}>
                   {trainInfo?.train_name || journeyData?.trainName || `Train ${trainNumber || ''}`.trim()}
                 </div>
+              </div>
+              <div className="action-chip" style={{ cursor: 'default' }}>
+                Your coach: {(journeyData?.coach || 'general').toString().toUpperCase()}
               </div>
               <div className="action-chip" style={{ cursor: 'default' }}>
                 <Users size={15} />
@@ -489,7 +501,7 @@ export default function GroupPage() {
         <div className="card coach-chat-shell" style={{ padding: '1rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', marginBottom: '1rem', flexWrap: 'wrap' }}>
             <div>
-              <h2 style={{ marginBottom: '0.25rem' }}>Coach conversation lane</h2>
+              <h2 style={{ marginBottom: '0.25rem' }}>Train conversation lane</h2>
             </div>
             <div className="chip-row">
               <div className="action-chip" style={{ cursor: 'default' }}>
@@ -529,14 +541,17 @@ export default function GroupPage() {
 
             {messages.length === 0 ? (
               <div className="coach-empty-state">
-                No updates yet. Send a coach message or use one of the quick request chips above.
+                No updates yet. Send a train message or use one of the quick request chips above.
               </div>
             ) : (
               messages.map((message, idx) => {
                 const type = getReqType(message.type, reqTypeMap);
                 const isMine = message.uid === user?.uid;
                 const seatSlot = getSeatSlot(`${message.passenger_id}-${message.uid || ''}`);
-                const seatHint = passengerById[message.passenger_id]?.berth || seatSlot.toUpperCase();
+                const passenger = passengerByUid[message.uid] || {};
+                const senderCoach = message.coach || passenger.coach || '';
+                const senderBerth = message.berth || passenger.berth || '';
+                const seatHint = [senderCoach, senderBerth].filter(Boolean).join('-') || seatSlot.toUpperCase();
                 const isAccepted =
                   type.id !== 'CHAT' &&
                   messages.some(
@@ -558,6 +573,11 @@ export default function GroupPage() {
                       <div className="message-head">
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                           <strong>{message.passenger_id}</strong>
+                          {senderCoach && (
+                            <span className="badge" style={{ background: 'rgba(32,50,79,0.08)', color: '#20324f' }}>
+                              Coach {senderCoach}
+                            </span>
+                          )}
                           <span className="badge" style={{ background: `${type.color}20`, color: type.color }}>
                             {type.label}
                           </span>
@@ -650,7 +670,7 @@ export default function GroupPage() {
               type="text"
               value={messageText}
               onChange={(e) => setMessageText(e.target.value)}
-              placeholder={selectedReq ? `Add context for ${getReqType(selectedReq, reqTypeMap).label.toLowerCase()}` : 'Type a message to your coach'}
+              placeholder={selectedReq ? `Add context for ${getReqType(selectedReq, reqTypeMap).label.toLowerCase()}` : 'Type a message to everyone on this train'}
               style={{ flex: 1, minWidth: 220 }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {

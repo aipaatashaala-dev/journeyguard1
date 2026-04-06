@@ -31,7 +31,7 @@ export default function LocationPage() {
           setJourneyData({
             journeyId: data.journey.group_id,
             trainNumber: data.journey.train_number,
-            coach: data.journey.coach || data.journey.coach_id?.replace('coach_', '') || 'general',
+            coach: data.journey.coach || 'general',
             journeyDate: data.journey.journey_date,
             berth: data.journey.berth || '',
           });

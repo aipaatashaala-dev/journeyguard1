@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import { API_BASE_URL } from '../utils/config';
-import { getCurrentJourneyCompat } from '../utils/api';
+import { getCurrentJourneyCompat, TRAIN_GROUP_CHANNEL_ID } from '../utils/api';
+import { formatTrainGroupName } from '../utils/groupNames';
 import {
   ChevronRight,
   Ticket,
@@ -96,16 +97,18 @@ export default function DashboardPage() {
           return;
         }
 
+        const storedJourney = JSON.parse(localStorage.getItem('jg_journey') || '{}');
         const nextJourney = {
           trainNumber: serverJourney.train_number,
+          trainName: serverJourney.train_name || storedJourney.trainName || '',
           journeyDate: serverJourney.journey_date,
-          coach: serverJourney.coach || serverJourney.coach_id?.replace('coach_', '') || 'general',
+          coach: serverJourney.coach || 'general',
           seat: serverJourney.berth || serverJourney.seat || '',
         };
 
         localStorage.setItem('jg_journey', JSON.stringify(nextJourney));
         localStorage.setItem('jg_group_id', serverJourney.group_id || `${nextJourney.trainNumber}_${nextJourney.journeyDate}`);
-        localStorage.setItem('jg_coach_id', serverJourney.coach_id || `coach_${nextJourney.coach}`);
+        localStorage.setItem('jg_coach_id', serverJourney.coach_id || TRAIN_GROUP_CHANNEL_ID);
         if (serverJourney.passenger_id) {
           localStorage.setItem('jg_passenger_id', serverJourney.passenger_id);
         }
@@ -138,7 +141,7 @@ export default function DashboardPage() {
 
   const getGroupPath = (journey, coachId) => {
     const groupId = `${journey.trainNumber}_${journey.journeyDate}`;
-    const coachKey = coachId || (journey.coach ? `coach_${journey.coach}` : 'coach_general');
+    const coachKey = coachId || TRAIN_GROUP_CHANNEL_ID;
     return `/group/${groupId}/${coachKey}`;
   };
 
@@ -241,19 +244,25 @@ export default function DashboardPage() {
 
     setLoading(true);
     try {
-      const journey = { trainNumber, journeyDate, coach, seat };
-      await joinBackgroundGroup({
+      const journey = {
+        trainNumber,
+        trainName: manualTrainDetails?.train_name || '',
+        journeyDate,
+        coach,
+        seat,
+      };
+      const joinData = await joinBackgroundGroup({
         trainNumber,
         journeyDate,
         coach,
         berth: seat,
         arrivalTime: manualTrainDetails?.arrival || null,
       });
-      toast.success('Joined your coach group.');
+      toast.success('Joined your train group.');
       setManualTrainDetails(null);
       setManualTrainConfirmed(false);
       setShowManualModal(false);
-      await handleJoinSuccess(journey);
+      await handleJoinSuccess(journey, joinData?.coach_id);
     } catch (err) {
       if (err.message !== 'validation' && err.message !== 'join_failed') {
         toast.error(err.message);
@@ -281,18 +290,25 @@ export default function DashboardPage() {
 
     setLoading(true);
     try {
-      const journey = { trainNumber, journeyDate, coach: 'general', berth: '', seat: '' };
-      await joinBackgroundGroup({
+      const journey = {
+        trainNumber,
+        trainName: generalTrainDetails?.train_name || '',
+        journeyDate,
+        coach: 'general',
+        berth: '',
+        seat: '',
+      };
+      const joinData = await joinBackgroundGroup({
         trainNumber,
         journeyDate,
         coach: 'general',
         arrivalTime: generalTrainDetails?.arrival || null,
       });
-      toast.success('Joined the general train group.');
+      toast.success('Joined the train group.');
       setGeneralTrainDetails(null);
       setGeneralTrainConfirmed(false);
       setShowGeneralModal(false);
-      await handleJoinSuccess(journey, 'coach_general');
+      await handleJoinSuccess(journey, joinData?.coach_id);
     } catch (err) {
       if (err.message !== 'validation' && err.message !== 'join_failed') {
         toast.error(err.message);
@@ -346,12 +362,13 @@ export default function DashboardPage() {
     try {
       const journey = {
         trainNumber: pnrDetails.train_number,
+        trainName: pnrDetails.train_name || '',
         journeyDate: pnrJourneyDate,
         coach: pnrDetails.coach || 'general',
         seat: selectedBerth,
       };
 
-      await joinBackgroundGroup({
+      const joinData = await joinBackgroundGroup({
         trainNumber: journey.trainNumber,
         journeyDate: journey.journeyDate,
         coach: journey.coach,
@@ -359,11 +376,11 @@ export default function DashboardPage() {
         arrivalTime: pnrDetails?.arrival || null,
       });
 
-      toast.success('PNR matched and coach joined.');
+      toast.success('PNR matched and train group joined.');
       setPnr('');
       setPnrDetails(null);
       setShowPnrModal(false);
-      await handleJoinSuccess(journey);
+      await handleJoinSuccess(journey, joinData?.coach_id);
     } catch (err) {
       if (err.message !== 'validation' && err.message !== 'join_failed') {
         toast.error(err.message);
@@ -395,7 +412,7 @@ export default function DashboardPage() {
   const quickCards = [
     {
       title: 'Board With PNR',
-      desc: 'Fetch train, berth, and coach context in one step.',
+      desc: 'Fetch train, berth, and seat context in one step.',
       icon: <Ticket size={28} color="var(--accent)" />,
       action: () => setShowPnrModal(true),
       accent: 'var(--accent)',
@@ -410,8 +427,8 @@ export default function DashboardPage() {
       bg: 'linear-gradient(135deg, rgba(247,198,106,0.14), rgba(216,123,74,0.12))',
     },
     {
-      title: 'General Passenger Group',
-      desc: 'Join a train-level conversation without berth details.',
+      title: 'General Passenger Entry',
+      desc: 'Join the train-wide conversation without berth details.',
       icon: <Users size={28} color="var(--accent2)" />,
       action: () => setShowGeneralModal(true),
       accent: 'var(--accent2)',
@@ -430,7 +447,7 @@ export default function DashboardPage() {
                 Traveler Dashboard
               </div>
               <h1 style={{ fontSize: 'clamp(2.2rem, 5vw, 3.6rem)', marginBottom: '0.8rem' }}>
-                Build your coach context before the train even settles.
+                Build your train context before the train even settles.
               </h1>
               <p style={{ color: 'var(--text2)', lineHeight: 1.8, maxWidth: 620 }}>
                 Choose the way you want to board into JourneyGuard. We can use your PNR, your coach details,
@@ -468,10 +485,12 @@ export default function DashboardPage() {
                 <div style={{ fontSize: '0.76rem', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#6a7c99' }}>
                   Active Boarding Pass
                 </div>
-                <h2 style={{ fontSize: '1.9rem', marginTop: '0.4rem' }}>Train {currentJourney.trainNumber}</h2>
+                <h2 style={{ fontSize: '1.9rem', marginTop: '0.4rem' }}>
+                  {formatTrainGroupName(currentJourney.trainName, currentJourney.trainNumber)}
+                </h2>
               </div>
               <div className="route-pill" style={{ background: 'rgba(32,50,79,0.08)', borderColor: 'rgba(32,50,79,0.12)', color: '#20324f' }}>
-                Ready for coach chat
+                Ready for train chat
               </div>
             </div>
 
@@ -484,7 +503,7 @@ export default function DashboardPage() {
 
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
               <button onClick={() => navigate(getGroupPath(currentJourney))} className="btn btn-primary">
-                Open Coach Group
+                Open Train Group
                 <ChevronRight size={16} />
               </button>
               <button onClick={() => setShowManualModal(true)} className="btn btn-secondary">Adjust Journey</button>
@@ -548,7 +567,7 @@ export default function DashboardPage() {
               {[
                 'Choose how to join your train context',
                 'Confirm berth or coach details',
-                'Enter your coach group and coordinate with fellow travelers',
+                'Enter your train group and coordinate across coaches',
                 'Use settings and support pages when needed',
               ].map((step) => (
                 <div key={step} style={{ display: 'flex', gap: 10, color: 'var(--text2)', lineHeight: 1.7 }}>
@@ -603,14 +622,14 @@ export default function DashboardPage() {
               <input className="input" value={manual.seat} onChange={(e) => setManual({ ...manual, seat: e.target.value.toUpperCase() })} placeholder="Seat" required />
             </div>
             <button type="submit" className="btn btn-primary" disabled={loading || !manualTrainDetails || !manualTrainConfirmed} style={{ justifyContent: 'center' }}>
-              {loading ? <span className="spinner" /> : 'Confirm and Join Coach Group'}
+              {loading ? <span className="spinner" /> : 'Confirm and Join Train Group'}
             </button>
           </form>
         </JourneyModal>
       )}
 
       {showGeneralModal && (
-        <JourneyModal title="General Passenger Group" subtitle="Join by train and date only." onClose={closeGeneralModal}>
+        <JourneyModal title="General Passenger Entry" subtitle="Join the same train-wide group without coach or berth details." onClose={closeGeneralModal}>
           <form onSubmit={handleGeneralModalSubmit} style={{ display: 'grid', gap: '1rem' }}>
             <input className="input" value={general.trainNumber} onChange={(e) => setGeneral({ ...general, trainNumber: e.target.value.toUpperCase() })} placeholder="Train number" required />
             <input className="input" type="date" value={general.journeyDate} onChange={(e) => setGeneral({ ...general, journeyDate: e.target.value })} required />

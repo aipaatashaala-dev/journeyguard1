@@ -65,7 +65,7 @@ export default function AdminJourneys() {
                 <div style={{ fontSize: '2rem', fontWeight: 800 }}>{journeys.length}</div>
               </div>
               <div className="card" style={{ padding: '1.3rem' }}>
-                <div style={{ color: 'var(--text2)', marginBottom: '0.35rem' }}>Total coaches in motion</div>
+                <div style={{ color: 'var(--text2)', marginBottom: '0.35rem' }}>Coaches represented</div>
                 <div style={{ fontSize: '2rem', fontWeight: 800 }}>{journeys.reduce((sum, item) => sum + item.coach_count, 0)}</div>
               </div>
               <div className="card" style={{ padding: '1.3rem' }}>
@@ -110,7 +110,7 @@ export default function AdminJourneys() {
                         <div style={{ minWidth: 140, padding: '0.85rem 1rem', borderRadius: 16, background: 'rgba(32,50,79,0.06)' }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#52627d', fontSize: '0.82rem' }}>
                             <LayoutPanelLeft size={14} />
-                            Coaches
+                            Coaches represented
                           </div>
                           <div style={{ fontSize: '1.45rem', fontWeight: 800, marginTop: 4 }}>{journey.coach_count}</div>
                         </div>

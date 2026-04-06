@@ -3,6 +3,7 @@ import { auth } from '../firebase';
 import { API_BASE_URL } from './config';
 
 const api = axios.create({ baseURL: API_BASE_URL });
+export const TRAIN_GROUP_CHANNEL_ID = 'train_chat';
 
 // Attach Firebase JWT to every request
 api.interceptors.request.use(async (config) => {
@@ -25,7 +26,7 @@ const readStoredJourneySnapshot = () => {
 
     const coach = stored.coach || 'general';
     const groupId = localStorage.getItem('jg_group_id') || `${stored.trainNumber}_${stored.journeyDate}`;
-    const coachId = localStorage.getItem('jg_coach_id') || `coach_${coach}`;
+    const coachId = localStorage.getItem('jg_coach_id') || TRAIN_GROUP_CHANNEL_ID;
 
     return {
       group_id: groupId,

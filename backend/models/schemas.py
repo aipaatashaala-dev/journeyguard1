@@ -50,6 +50,7 @@ class SetPasswordRequest(BaseModel):
 
 class UpdateUserProfileRequest(BaseModel):
     email: Optional[str] = None
+    display_name: Optional[str] = None
 
     @field_validator("email")
     @classmethod
@@ -57,7 +58,18 @@ class UpdateUserProfileRequest(BaseModel):
         if v and "@" not in v:
             raise ValueError("Invalid email format")
         return v
-        return v
+
+    @field_validator("display_name")
+    @classmethod
+    def valid_display_name(cls, v):
+        if v is None:
+            return None
+        value = str(v).strip()
+        if not value:
+            raise ValueError("Display name cannot be empty")
+        if len(value) > 40:
+            raise ValueError("Display name must be 40 characters or fewer")
+        return value
 
 
 class JoinJourneyRequest(BaseModel):
@@ -66,6 +78,30 @@ class JoinJourneyRequest(BaseModel):
     coach: str
     berth: str
     arrival_time: Optional[str] = None
+    berth_status: Optional[str] = None
+    join_mode: Optional[str] = None
+
+    @field_validator("berth_status")
+    @classmethod
+    def valid_berth_status(cls, v):
+        if v is None or str(v).strip() == "":
+            return None
+        value = str(v).strip().upper()
+        allowed = {"CONFIRMED", "RAC"}
+        if value not in allowed:
+            raise ValueError(f"berth_status must be one of {allowed}")
+        return value
+
+    @field_validator("join_mode")
+    @classmethod
+    def valid_join_mode(cls, v):
+        if v is None or str(v).strip() == "":
+            return None
+        value = str(v).strip().lower()
+        allowed = {"manual", "pnr", "general"}
+        if value not in allowed:
+            raise ValueError(f"join_mode must be one of {allowed}")
+        return value
 
 
 class TrainInfoResponse(BaseModel):

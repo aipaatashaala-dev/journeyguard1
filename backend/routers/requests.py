@@ -5,10 +5,35 @@ from dependencies import get_current_user
 from models.schemas import AssistanceRequestCreate, AssistanceRequestUpdate
 
 router = APIRouter()
+MESSAGE_EDIT_WINDOW_MS = 5 * 60 * 1000
 
 
 def _current_user_journey(uid: str) -> dict:
     return fb_db.reference(f"user_journeys/{uid}").get() or {}
+
+
+def _normalize_display_name(value) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())[:40]
+
+
+def _fallback_display_name(uid: str, journey: dict, user: dict) -> str:
+    display_name = _normalize_display_name(journey.get("display_name"))
+    if display_name:
+        return display_name
+
+    profile = fb_db.reference(f"users/{uid}").get() or {}
+    display_name = _normalize_display_name(profile.get("display_name") or user.get("name"))
+    if display_name:
+        return display_name
+
+    email = str(profile.get("email") or user.get("email") or "").strip()
+    if "@" in email:
+        email = email.split("@", 1)[0]
+
+    display_name = _normalize_display_name(email)
+    return display_name or str(journey.get("passenger_id") or f"Passenger-{uid[:4]}")
 
 
 def _require_group_access(uid: str, journey_id: str, coach_id: str | None = None) -> dict:
@@ -68,6 +93,7 @@ async def send_request(body: AssistanceRequestCreate, user: dict = Depends(get_c
     uid = user["uid"]
     journey = _require_group_access(uid, body.journey_id, body.coach_id)
     passenger_id = journey.get("passenger_id", f"Passenger-{uid[:4]}")
+    display_name = _fallback_display_name(uid, journey, user)
 
     if body.request_type == "EMERGENCY":
         path = f"train_groups/{body.journey_id}/emergency_alerts"
@@ -76,12 +102,14 @@ async def send_request(body: AssistanceRequestCreate, user: dict = Depends(get_c
 
     payload = {
         "passenger_id": passenger_id,
+        "display_name": display_name,
         "type": body.request_type,
         "timestamp": int(time.time() * 1000),
         "uid": uid,
         "active": True,
         "coach": journey.get("coach") or "general",
         "berth": journey.get("berth") or "",
+        "berth_status": journey.get("berth_status") or "",
     }
 
     for field in ("message", "location_link", "google_maps_url", "expires_at", "lat", "lng", "accuracy"):
@@ -92,7 +120,12 @@ async def send_request(body: AssistanceRequestCreate, user: dict = Depends(get_c
     new_ref = fb_db.reference(path).push()
     new_ref.set(payload)
 
-    return {"message": "Request sent", "request_id": new_ref.key, "passenger_id": passenger_id}
+    return {
+        "message": "Request sent",
+        "request_id": new_ref.key,
+        "passenger_id": passenger_id,
+        "display_name": display_name,
+    }
 
 
 @router.get("/{journey_id}/{coach_id}")
@@ -137,6 +170,20 @@ async def update_request(
 
     if not updates:
         return {"message": "No changes"}
+
+    new_message = updates.get("message")
+    message_changed = (
+        new_message is not None and
+        str(new_message).strip() != str(data.get("message") or "").strip()
+    )
+    if message_changed:
+        age_ms = int(time.time() * 1000) - int(data.get("timestamp") or 0)
+        if age_ms > MESSAGE_EDIT_WINDOW_MS:
+            raise HTTPException(
+                status_code=403,
+                detail="Messages can be edited only within 5 minutes of sending",
+            )
+        updates["edited_at"] = int(time.time() * 1000)
 
     ref.update(updates)
     return {"message": "Request updated", "request": {"id": request_id, **data, **updates}}

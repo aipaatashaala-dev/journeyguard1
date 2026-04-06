@@ -265,16 +265,9 @@ async def get_all_journeys(_: dict = Depends(require_admin)):
                 continue
             train_num, date = group_id.split("_", 1)
             metadata = group_data.get("metadata", {}) if isinstance(group_data.get("metadata"), dict) else {}
-            passenger_count = 0
-            coach_count = 0
-            for coach_id, coach_data in group_data.items():
-                if coach_id == "metadata" or not isinstance(coach_data, dict):
-                    continue
-                coach_count += 1
-                passenger_count += sum(
-                    1 for key, value in coach_data.items()
-                    if key != "requests" and isinstance(value, dict) and value.get("passenger_id")
-                )
+            members = _collect_group_members(group_data)
+            passenger_count = len(members)
+            coach_count = _coach_count(group_data, members)
             journeys.append(
                 JourneyResponse(
                     group_id=group_id,
@@ -363,24 +356,16 @@ async def get_all_requests(_: dict = Depends(require_admin)):
         for group_id, group_data in groups_data.items():
             if not isinstance(group_data, dict):
                 continue
-            for coach_id, coach_data in group_data.items():
-                if not isinstance(coach_data, dict):
-                    continue
-                coach_requests = coach_data.get("requests", {}) if coach_id.startswith("coach_") else {}
-                if coach_id == "emergency_alerts":
-                    coach_requests = coach_data
-                for req_id, req_data in coach_requests.items():
-                    if not isinstance(req_data, dict):
-                        continue
-                    requests.append(
-                        RequestResponse(
-                            id=req_id,
-                            group_id=group_id,
-                            passenger_id=req_data.get("passenger_id", ""),
-                            type=req_data.get("type", ""),
-                            timestamp=req_data.get("timestamp", 0),
-                        )
+            for req_id, req_data, _ in _collect_group_requests(group_id, group_data):
+                requests.append(
+                    RequestResponse(
+                        id=req_id,
+                        group_id=group_id,
+                        passenger_id=req_data.get("passenger_id", ""),
+                        type=req_data.get("type", ""),
+                        timestamp=req_data.get("timestamp", 0),
                     )
+                )
         requests.sort(key=lambda item: item.timestamp, reverse=True)
         return requests
     except Exception as exc:
@@ -393,15 +378,11 @@ async def resolve_request(group_id: str, request_id: str, _: dict = Depends(requ
     try:
         group_data = fb_db.reference(f"train_groups/{group_id}").get() or {}
         removed = False
-        for coach_id, coach_data in group_data.items():
-            if not isinstance(coach_data, dict):
+        for req_id, _, path in _collect_group_requests(group_id, group_data):
+            if req_id != request_id:
                 continue
-            if coach_id.startswith("coach_") and isinstance(coach_data.get("requests"), dict) and request_id in coach_data["requests"]:
-                fb_db.reference(f"train_groups/{group_id}/{coach_id}/requests/{request_id}").delete()
-                removed = True
-            if coach_id == "emergency_alerts" and request_id in coach_data:
-                fb_db.reference(f"train_groups/{group_id}/emergency_alerts/{request_id}").delete()
-                removed = True
+            fb_db.reference(path).delete()
+            removed = True
         if not removed:
             raise HTTPException(status_code=404, detail="Request not found")
         return {"message": "Request resolved"}
@@ -422,16 +403,10 @@ async def get_system_stats(_: dict = Depends(require_admin)):
         active_locations = sum(1 for loc in locations_data.values() if isinstance(loc, dict) and loc.get("active"))
 
         requests_count = 0
-        for group_data in groups_data.values():
+        for group_id, group_data in groups_data.items():
             if not isinstance(group_data, dict):
                 continue
-            for coach_id, coach_data in group_data.items():
-                if not isinstance(coach_data, dict):
-                    continue
-                if coach_id.startswith("coach_"):
-                    requests_count += len(coach_data.get("requests", {}) or {})
-                elif coach_id == "emergency_alerts":
-                    requests_count += len(coach_data or {})
+            requests_count += len(_collect_group_requests(group_id, group_data))
 
         return {
             "total_users": users_count,

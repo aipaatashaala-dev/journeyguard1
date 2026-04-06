@@ -10,10 +10,11 @@ import re
 from html import unescape
 from datetime import datetime
 
-import httpx
 from firebase_admin import db as fb_db
 
 from models.schemas import TrainInfoResponse
+from services.http_pool import get_shared_http_client, get_slow_lane_http_client
+from services.runtime_controls import AsyncSingleFlight, TTLCache
 
 IRCTC_API_KEY = os.getenv("IRCTC_API_KEY", "68ad334fc9msh44bddffcf14f1acp17032bjsn61766b1ac602")
 IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "irctc1.p.rapidapi.com")
@@ -84,6 +85,8 @@ _TRAIN_CATALOG = {
         "arrival": "21:45 +1",
     },
 }
+_LOCAL_TRAIN_CACHE = TTLCache(max_size=1024)
+_TRAIN_SINGLE_FLIGHT = AsyncSingleFlight()
 
 
 def _headers() -> dict:
@@ -301,29 +304,29 @@ async def _scrape_train_metadata(train_number: str):
         ("erail", f"https://erail.in/train-enquiry/{train_number}"),
     ]
 
-    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-        for source_name, url in sources:
-            try:
-                response = await client.get(
-                    url,
-                    headers={
-                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
-                        "Accept-Language": "en-US,en;q=0.9",
-                    },
-                )
-                if response.status_code != 200:
-                    continue
-
-                html = response.text
-                if source_name == "confirmtkt":
-                    parsed = _extract_confirmtkt_train(html, train_number)
-                else:
-                    parsed = None
-
-                if parsed and any(parsed.values()):
-                    return parsed, f"scraped_{source_name}"
-            except Exception:
+    client = await get_slow_lane_http_client()
+    for source_name, url in sources:
+        try:
+            response = await client.get(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
+                },
+            )
+            if response.status_code != 200:
                 continue
+
+            html = response.text
+            if source_name == "confirmtkt":
+                parsed = _extract_confirmtkt_train(html, train_number)
+            else:
+                parsed = None
+
+            if parsed and any(parsed.values()):
+                return parsed, f"scraped_{source_name}"
+        except Exception:
+            continue
 
     return None, None
 
@@ -423,6 +426,27 @@ def _parse_train_info(train_number: str, journey_date: str, payload: dict, endpo
 
 async def get_train_info(train_number: str, journey_date: str, refresh: bool = False) -> TrainInfoResponse:
     cache_key = f"{train_number}_{journey_date}"
+    if not refresh:
+      local_cached = _LOCAL_TRAIN_CACHE.get(cache_key)
+      if local_cached:
+          return TrainInfoResponse(**local_cached)
+
+    async def load():
+        parsed = await _get_train_info_uncached(train_number, journey_date, refresh=refresh)
+        _LOCAL_TRAIN_CACHE.set(
+            cache_key,
+            parsed.model_dump(),
+            ttl_seconds=30 if refresh else 90,
+        )
+        return parsed
+
+    if refresh:
+        return await load()
+    return await _TRAIN_SINGLE_FLIGHT.run(f"train:{cache_key}", load)
+
+
+async def _get_train_info_uncached(train_number: str, journey_date: str, refresh: bool = False) -> TrainInfoResponse:
+    cache_key = f"{train_number}_{journey_date}"
     cache_ref = fb_db.reference(f"train_info/{cache_key}")
     cached = cache_ref.get()
 
@@ -475,27 +499,27 @@ async def get_train_info(train_number: str, journey_date: str, refresh: bool = F
         ("trainStatus", {"trainNo": train_number, "doj": date_compact}),
     ]
 
-    async with httpx.AsyncClient(timeout=12) as client:
-        for endpoint_name, params in candidate_requests:
-            try:
-                response = await client.get(
-                    f"{IRCTC_API_BASE}/{endpoint_name}",
-                    params=params,
-                    headers=_headers(),
-                )
-                if response.status_code != 200:
-                    continue
-
-                payload = response.json()
-                if payload.get("success") is False and not payload.get("data"):
-                    continue
-
-                parsed = _parse_train_info(train_number, journey_date, payload, endpoint_name)
-                if parsed.train_exists:
-                    _store_train_cache(parsed, source=endpoint_name)
-                    return parsed
-            except Exception:
+    client = await get_shared_http_client()
+    for endpoint_name, params in candidate_requests:
+        try:
+            response = await client.get(
+                f"{IRCTC_API_BASE}/{endpoint_name}",
+                params=params,
+                headers=_headers(),
+            )
+            if response.status_code != 200:
                 continue
+
+            payload = response.json()
+            if payload.get("success") is False and not payload.get("data"):
+                continue
+
+            parsed = _parse_train_info(train_number, journey_date, payload, endpoint_name)
+            if parsed.train_exists:
+                _store_train_cache(parsed, source=endpoint_name)
+                return parsed
+        except Exception:
+            continue
 
     cached_train = _lookup_cached_train_details(train_number)
     if cached_train and any(cached_train.values()):

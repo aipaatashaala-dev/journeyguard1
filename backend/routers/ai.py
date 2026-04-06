@@ -11,10 +11,11 @@ from services.groq_service import generate_group_reply, groq_enabled
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+TRAIN_GROUP_CHANNEL_ID = "train_chat"
 
 
 def _thread_messages_ref(uid: str, journey_id: str, coach_id: str):
-    return fb_db.reference(f"ai_threads/{uid}/{journey_id}/{coach_id}/messages")
+    return fb_db.reference(f"ai_threads/{uid}/{journey_id}/{TRAIN_GROUP_CHANNEL_ID}/messages")
 
 
 def _load_thread(uid: str, journey_id: str, coach_id: str) -> list[dict]:
@@ -30,17 +31,30 @@ def _load_thread(uid: str, journey_id: str, coach_id: str) -> list[dict]:
 
 def _serialize_thread(uid: str, journey_id: str, coach_id: str) -> AIThreadResponse:
     messages = [AIThreadMessage(**item) for item in _load_thread(uid, journey_id, coach_id)]
-    return AIThreadResponse(messages=messages, journey_id=journey_id, coach_id=coach_id)
+    return AIThreadResponse(messages=messages, journey_id=journey_id, coach_id=TRAIN_GROUP_CHANNEL_ID)
 
 
 def _coach_passengers(journey_id: str, coach_id: str) -> list[dict]:
-    coach_data = fb_db.reference(f"train_groups/{journey_id}/{coach_id}").get() or {}
+    group_data = fb_db.reference(f"train_groups/{journey_id}").get() or {}
+    members: dict[str, dict] = {}
+
+    members_node = group_data.get("members")
+    if isinstance(members_node, dict):
+        for uid, value in members_node.items():
+            if isinstance(value, dict) and value.get("passenger_id"):
+                members[uid] = value
+
+    for group_key, value in group_data.items():
+        if not group_key.startswith("coach_") or not isinstance(value, dict):
+            continue
+        for uid, member in value.items():
+            if uid == "requests" or uid in members:
+                continue
+            if isinstance(member, dict) and member.get("passenger_id"):
+                members[uid] = member
+
     passengers = []
-    for key, value in coach_data.items():
-        if key in {"requests", "metadata"}:
-            continue
-        if not isinstance(value, dict) or not value.get("passenger_id"):
-            continue
+    for key, value in members.items():
         passengers.append(
             {
                 "uid": key,
@@ -55,7 +69,18 @@ def _coach_passengers(journey_id: str, coach_id: str) -> list[dict]:
 
 
 def _requester_context(uid: str, journey_id: str, coach_id: str, fallback_email: str | None) -> dict:
-    coach_entry = fb_db.reference(f"train_groups/{journey_id}/{coach_id}/{uid}").get() or {}
+    coach_entry = fb_db.reference(f"train_groups/{journey_id}/members/{uid}").get() or {}
+    if not coach_entry:
+        coach_entry = fb_db.reference(f"train_groups/{journey_id}/{coach_id}/{uid}").get() or {}
+    if not coach_entry:
+        group_data = fb_db.reference(f"train_groups/{journey_id}").get() or {}
+        for group_key, group_value in group_data.items():
+            if not group_key.startswith("coach_") or not isinstance(group_value, dict):
+                continue
+            legacy_entry = group_value.get(uid)
+            if isinstance(legacy_entry, dict):
+                coach_entry = legacy_entry
+                break
     user_journey = fb_db.reference(f"user_journeys/{uid}").get() or {}
 
     return {

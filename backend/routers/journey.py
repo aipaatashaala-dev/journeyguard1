@@ -1,6 +1,7 @@
 import re
 import time
 import threading
+import logging
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
 from firebase_admin import db as fb_db
@@ -11,6 +12,7 @@ from services.train_service import get_train_info
 from services.location_service import expire_location_session, get_location_data
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 _group_monitor_lock = threading.Lock()
 _group_monitor_events: dict[str, threading.Event] = {}
 _FALLBACK_GROUP_RETENTION_HOURS = 24
@@ -27,6 +29,100 @@ def _coach_id(coach: str) -> str:
 
 def _current_user_journey(uid: str) -> dict:
     return fb_db.reference(f"user_journeys/{uid}").get() or {}
+
+
+def _normalize_display_name(value: str | None) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).strip().split())[:40]
+
+
+def _default_display_name(email: str | None = None, provided_name: str | None = None) -> str:
+    display_name = _normalize_display_name(provided_name)
+    if display_name:
+        return display_name
+
+    email_value = str(email or "").strip()
+    if "@" in email_value:
+        email_value = email_value.split("@", 1)[0]
+
+    display_name = _normalize_display_name(email_value)
+    return display_name or "Traveler"
+
+
+def _ensure_user_display_name(uid: str, email: str | None = None, provided_name: str | None = None) -> str:
+    profile_ref = fb_db.reference(f"users/{uid}")
+    profile = profile_ref.get() or {}
+    display_name = _normalize_display_name(profile.get("display_name"))
+    if not display_name:
+        display_name = _default_display_name(
+            profile.get("email") or email,
+            provided_name,
+        )
+
+    updates = {}
+    if display_name and profile.get("display_name") != display_name:
+        updates["display_name"] = display_name
+    if email and not profile.get("email"):
+        updates["email"] = email
+    if updates:
+        profile_ref.update(updates)
+
+    return display_name
+
+
+def _resolve_user_email(uid: str, user: dict | None = None) -> str:
+    email = str((user or {}).get("email") or "").strip()
+    if email:
+        return email
+
+    try:
+        profile = fb_db.reference(f"users/{uid}").get() or {}
+    except Exception:
+        logger.exception("Could not load profile email for uid=%s", uid)
+        return ""
+
+    return str(profile.get("email") or "").strip()
+
+
+def _send_journey_start_email_task(
+    email: str,
+    passenger_id: str,
+    train_number: str,
+    coach: str,
+    journey_date: str,
+    uid: str,
+):
+    if not send_journey_start_email(email, passenger_id, train_number, coach, journey_date):
+        logger.warning(
+            "Journey start email could not be sent for uid=%s train=%s email=%s",
+            uid,
+            train_number,
+            email or "<missing>",
+        )
+
+
+def _send_journey_end_email_task(
+    email: str,
+    passenger_id: str,
+    train_number: str,
+    uid: str,
+):
+    if not send_journey_end_email(email, passenger_id, train_number):
+        logger.warning(
+            "Journey end email could not be sent for uid=%s train=%s email=%s",
+            uid,
+            train_number,
+            email or "<missing>",
+        )
+
+
+def _member_label(member: dict) -> str:
+    return (
+        _normalize_display_name(member.get("display_name"))
+        or str(member.get("passenger_id") or "").strip()
+        or "Traveler"
+    )
 
 
 def _safe_int(value) -> int | None:
@@ -177,10 +273,55 @@ def _list_group_members(group_id: str) -> list[dict]:
         key=lambda item: (
             str(item.get("coach") or "").upper(),
             str(item.get("berth") or "").upper(),
-            str(item.get("passenger_id") or "").upper(),
+            _member_label(item).upper(),
         )
     )
     return passengers
+
+
+def _group_members_for_seat(group_id: str, coach: str, berth: str, exclude_uid: str | None = None) -> list[dict]:
+    coach_value = str(coach or "").strip().upper()
+    berth_value = str(berth or "").strip().upper()
+    if not coach_value or not berth_value:
+        return []
+
+    return [
+        member
+        for member in _list_group_members(group_id)
+        if member.get("uid") != exclude_uid
+        and str(member.get("coach") or "").strip().upper() == coach_value
+        and str(member.get("berth") or "").strip().upper() == berth_value
+    ]
+
+
+def _seat_token(value: str) -> str:
+    cleaned = re.sub(r"[^A-Z0-9]+", "_", str(value or "").strip().upper())
+    return cleaned.strip("_") or "NA"
+
+
+def _post_rac_connection_message(group_id: str, coach: str, berth: str):
+    rac_members = [
+        member
+        for member in _group_members_for_seat(group_id, coach, berth)
+        if str(member.get("berth_status") or "").strip().upper() == "RAC"
+    ]
+    if len(rac_members) < 2:
+        return
+
+    rac_members.sort(key=lambda item: str(item.get("uid") or ""))
+    first, second = rac_members[:2]
+    message_key = (
+        f"system_rac_connect_{_seat_token(coach)}_{_seat_token(berth)}_"
+        f"{first.get('uid', '')[:8]}_{second.get('uid', '')[:8]}"
+    )
+    _post_system_message(
+        group_id,
+        message_key,
+        (
+            f"RAC seat match found in coach {coach} seat {berth}. "
+            f"{_member_label(first)} and {_member_label(second)} can message each other here to coordinate."
+        ),
+    )
 
 
 def _get_group_member(group_id: str, uid: str, coach_id_hint: str | None = None) -> dict | None:
@@ -221,6 +362,7 @@ def _post_system_message(group_id: str, message_key: str, message_text: str, tim
     existing = message_ref.get() or {}
     message_ref.set({
         "passenger_id": "JourneyGuard Updates",
+        "display_name": "JourneyGuard Updates",
         "type": "SYSTEM",
         "message": message_text,
         "timestamp": existing.get("timestamp", timestamp_ms),
@@ -490,12 +632,26 @@ async def get_current_journey(user: dict = Depends(get_current_user)):
         fb_db.reference(f"user_journeys/{uid}").delete()
         return {"journey": None}
 
+    profile_display_name = _ensure_user_display_name(uid, user.get("email"), user.get("name"))
+    display_name = (
+        profile_display_name
+        or _normalize_display_name(membership.get("display_name"))
+        or _normalize_display_name(journey.get("display_name"))
+    )
+
+    root_member_ref = fb_db.reference(f"train_groups/{group_id}/members/{uid}")
+    root_member = root_member_ref.get()
+    if isinstance(root_member, dict) and root_member.get("passenger_id") and root_member.get("display_name") != display_name:
+        root_member_ref.update({"display_name": display_name})
+
     synced_fields = {}
     if journey.get("coach_id") != TRAIN_GROUP_CHANNEL_ID:
         synced_fields["coach_id"] = TRAIN_GROUP_CHANNEL_ID
-    for field in ("coach", "berth", "passenger_id"):
+    for field in ("coach", "berth", "passenger_id", "berth_status", "display_name"):
         if membership.get(field) and journey.get(field) != membership.get(field):
             synced_fields[field] = membership.get(field)
+    if display_name and journey.get("display_name") != display_name:
+        synced_fields["display_name"] = display_name
 
     if synced_fields:
         fb_db.reference(f"user_journeys/{uid}").update(synced_fields)
@@ -533,22 +689,67 @@ def _delete_group_and_chats(group_id: str):
 @router.post("/join")
 async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_current_user), background_tasks: BackgroundTasks = None):
     uid        = user["uid"]
-    email      = user.get("email", "")
+    email      = _resolve_user_email(uid, user)
     group_id   = _group_id(body.train_number, body.journey_date)
     coach_id   = _coach_id(body.coach)
+    join_mode = (body.join_mode or "").strip().lower() or None
     coach_value = (body.coach or "general").strip() or "general"
     coach_value = "general" if coach_value.lower() == "general" else coach_value.upper()
     berth_value = (body.berth or "").strip().upper()
+    berth_status = (body.berth_status or "").strip().upper() or None
+    if coach_value == "general":
+        berth_status = None
     passenger_coach_label = "General" if coach_value == "general" else coach_value
     passenger_id = f"Passenger {passenger_coach_label}-{berth_value}" if berth_value else f"Passenger {passenger_coach_label}"
+    display_name = _ensure_user_display_name(uid, email, user.get("name"))
     fallback_cleanup_at = _parse_group_cleanup_time(
         body.journey_date,
         body.arrival_time,
         grace_hours=_FALLBACK_GROUP_RETENTION_HOURS,
     )
 
+    existing = fb_db.reference(f"user_journeys/{uid}").get() or {}
+    current_target_group = existing.get("group_id") if existing.get("group_id") == group_id else None
+    seat_matches = _group_members_for_seat(
+        group_id,
+        coach_value,
+        berth_value,
+        exclude_uid=uid if current_target_group == group_id else None,
+    )
+
+    if join_mode == "manual" and coach_value != "general" and berth_value:
+        if not berth_status:
+            raise HTTPException(status_code=422, detail="Choose whether this manual seat is Confirmed or RAC")
+        if seat_matches:
+            existing_statuses = {
+                str(member.get("berth_status") or "CONFIRMED").strip().upper()
+                for member in seat_matches
+            }
+            if berth_status != "RAC":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "manual_seat_conflict",
+                        "message": (
+                            "This coach and seat already exists for another passenger. "
+                            "If this is an RAC ticket, switch the manual entry to RAC. "
+                            "Otherwise please check the details."
+                        ),
+                    },
+                )
+            if len(seat_matches) >= 2 or any(status != "RAC" for status in existing_statuses):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "rac_seat_unavailable",
+                        "message": (
+                            "This seat is already in use. RAC sharing is allowed only for two RAC passengers "
+                            "with the same coach and seat."
+                        ),
+                    },
+                )
+
     # Remove from any previous group
-    existing = fb_db.reference(f"user_journeys/{uid}").get()
     if existing:
         old_group = existing.get("group_id")
         old_coach = existing.get("coach_id")
@@ -558,8 +759,10 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
     # Join new group — anonymous record only
     fb_db.reference(f"train_groups/{group_id}/members/{uid}").set({
         "passenger_id": passenger_id,
+        "display_name": display_name,
         "coach"       : coach_value,
         "berth"       : berth_value,
+        "berth_status": berth_status,
         "joined_at"   : int(time.time() * 1000),
     })
 
@@ -569,10 +772,13 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         "group_id"    : group_id,
         "coach_id"    : coach_id,
         "passenger_id": passenger_id,
+        "display_name": display_name,
         "train_number": body.train_number,
         "journey_date": body.journey_date,
         "coach"       : coach_value,
         "berth"       : berth_value,
+        "berth_status": berth_status,
+        "join_mode"   : join_mode,
         "started_at"  : join_time,
         "arrival_time": body.arrival_time,
         "cleanup_at"  : None,
@@ -606,25 +812,46 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         })
 
     _ensure_group_monitor(group_id)
+    if berth_status == "RAC" and coach_value != "general" and berth_value:
+        _post_rac_connection_message(group_id, coach_value, berth_value)
 
     # Send welcome email (non-blocking – fire and forget)
-    try:
-        send_journey_start_email(email, passenger_id, body.train_number, coach_value, body.journey_date)
-    except Exception:
-        pass
+    if email:
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _send_journey_start_email_task,
+                email,
+                passenger_id,
+                body.train_number,
+                coach_value,
+                body.journey_date,
+                uid,
+            )
+        else:
+            _send_journey_start_email_task(
+                email,
+                passenger_id,
+                body.train_number,
+                coach_value,
+                body.journey_date,
+                uid,
+            )
+    else:
+        logger.warning("Journey start email skipped because no email was found for uid=%s", uid)
 
     return {
         "group_id"    : group_id,
         "coach_id"    : coach_id,
         "passenger_id": passenger_id,
+        "display_name": display_name,
         "message"     : "Joined journey group",
     }
 
 
 @router.post("/{journey_id}/leave")
-async def leave_journey(journey_id: str, user: dict = Depends(get_current_user)):
+async def leave_journey(journey_id: str, user: dict = Depends(get_current_user), background_tasks: BackgroundTasks = None):
     uid   = user["uid"]
-    email = user.get("email", "")
+    email = _resolve_user_email(uid, user)
 
     journey = fb_db.reference(f"user_journeys/{uid}").get()
     if not journey:
@@ -647,17 +874,31 @@ async def leave_journey(journey_id: str, user: dict = Depends(get_current_user))
     expire_location_session(journey_id)
 
     # Send end email
-    try:
-        passenger_id = journey.get("passenger_id", "Traveler")
-        send_journey_end_email(email, passenger_id, train)
-    except Exception:
-        pass
+    passenger_id = journey.get("passenger_id", "Traveler")
+    if email:
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _send_journey_end_email_task,
+                email,
+                passenger_id,
+                train,
+                uid,
+            )
+        else:
+            _send_journey_end_email_task(
+                email,
+                passenger_id,
+                train,
+                uid,
+            )
+    else:
+        logger.warning("Journey end email skipped because no email was found for uid=%s", uid)
 
     return {"message": "Left journey group. Location link expired."}
 
 
 @router.post("/{journey_id}/complete")
-async def complete_journey(journey_id: str, user: dict = Depends(get_current_user)):
+async def complete_journey(journey_id: str, user: dict = Depends(get_current_user), background_tasks: BackgroundTasks = None):
     """Mark journey as completed and schedule group cleanup after 1 hour"""
     uid = user["uid"]
     
@@ -668,7 +909,7 @@ async def complete_journey(journey_id: str, user: dict = Depends(get_current_use
     group_id = journey.get("group_id")
     coach_id = journey.get("coach_id")
     train = journey.get("train_number", "")
-    email = user.get("email", "")
+    email = _resolve_user_email(uid, user)
     
     # Mark journey as completed
     fb_db.reference(f"user_journeys/{uid}").update({
@@ -692,11 +933,25 @@ async def complete_journey(journey_id: str, user: dict = Depends(get_current_use
     )
     
     # Send completion email
-    try:
-        passenger_id = journey.get("passenger_id", "Traveler")
-        send_journey_end_email(email, passenger_id, train)
-    except Exception:
-        pass
+    passenger_id = journey.get("passenger_id", "Traveler")
+    if email:
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _send_journey_end_email_task,
+                email,
+                passenger_id,
+                train,
+                uid,
+            )
+        else:
+            _send_journey_end_email_task(
+                email,
+                passenger_id,
+                train,
+                uid,
+            )
+    else:
+        logger.warning("Journey completion email skipped because no email was found for uid=%s", uid)
     
     return {
         "message": "Journey marked as completed. Group will be deleted in 1 hour.",

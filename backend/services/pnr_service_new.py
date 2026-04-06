@@ -6,15 +6,18 @@ PNR service - simplified
 """
 import hashlib
 import os
-import httpx
 from datetime import datetime, timedelta, date
 from firebase_admin import db as fb_db
 from models.schemas import PNRDetailsResponse
+from services.http_pool import get_shared_http_client
+from services.runtime_controls import AsyncSingleFlight, TTLCache
 
 # IRCTC RapidAPI Configuration
 IRCTC_API_KEY = os.getenv("IRCTC_API_KEY", "68ad334fc9msh44bddffcf14f1acp17032bjsn61766b1ac602")
 IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "irctc1.p.rapidapi.com")
 IRCTC_API_BASE = os.getenv("IRCTC_API_BASE", f"https://{IRCTC_API_HOST}")
+_LOCAL_PNR_CACHE = TTLCache(max_size=1024)
+_PNR_SINGLE_FLIGHT = AsyncSingleFlight()
 
 
 # ── Helper Functions ────────────────────────────────────────────────────────
@@ -56,53 +59,68 @@ async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) 
     Returns PNR details or error.
     """
     print(f"\n[PNR] Processing PNR: {pnr} (refresh={refresh})")
-    
-    # Check if PNR is already in Firebase
+
+    if not refresh:
+        local_cached = _LOCAL_PNR_CACHE.get(pnr)
+        if local_cached:
+            if local_cached.get("status") == "no_booking":
+                raise Exception(f"PNR {pnr} not found - no booking available")
+            return _format_pnr_response(local_cached)
+
+    async def load():
+        result = await _get_pnr_details_uncached(pnr, refresh=refresh)
+        _LOCAL_PNR_CACHE.set(
+            pnr,
+            result,
+            ttl_seconds=30 if refresh else 90,
+        )
+        if result.get("status") == "no_booking":
+            raise Exception(f"PNR {pnr} not found - no booking available")
+        return _format_pnr_response(result)
+
+    if refresh:
+        return await load()
+    return await _PNR_SINGLE_FLIGHT.run(f"pnr:{pnr}", load)
+
+
+async def _get_pnr_details_uncached(pnr: str, refresh: bool = False) -> dict:
     pnr_ref = fb_db.reference(f"pnr_data/{pnr}")
     existing_pnr = pnr_ref.get()
-    
+
     if not refresh and existing_pnr and existing_pnr.get("fetched_at"):
-        # Use cached data if it's less than 2 hours old (reduced from 24 hours for fresher data)
         fetched_time = datetime.fromisoformat(existing_pnr.get("fetched_at", ""))
         cache_age = (datetime.now() - fetched_time).total_seconds()
-        if cache_age < 7200:  # 2 hours instead of 24 hours
+        if cache_age < 7200:
             print(f"[PNR] Found recent cached PNR data (age: {cache_age/60:.1f} minutes)")
-            if existing_pnr.get("status") == "no_booking":
-                raise Exception("PNR not found - no booking available")
-            return _format_pnr_response(existing_pnr)
-        else:
-            print(f"[PNR] Cache expired (age: {cache_age/3600:.1f} hours), fetching fresh data")
+            return existing_pnr
+        print(f"[PNR] Cache expired (age: {cache_age/3600:.1f} hours), fetching fresh data")
     elif refresh:
         print(f"[PNR] Force refresh requested, fetching fresh data from IRCTC")
-    
-    # Try to fetch from IRCTC API
+
     print(f"[PNR] Fetching from IRCTC API...")
     pnr_data = await _fetch_from_irctc(pnr)
-    
+
     if not pnr_data:
         print(f"[PNR] IRCTC API returned no data - PNR not found")
-        # Store in Firebase that this PNR has no booking
+        not_found_payload = {
+            "pnr": pnr,
+            "status": "no_booking",
+            "created_at": datetime.now().isoformat(),
+            "fetched_at": datetime.now().isoformat(),
+        }
         try:
-            pnr_ref.set({
-                "pnr": pnr,
-                "status": "no_booking",
-                "created_at": datetime.now().isoformat(),
-                "fetched_at": datetime.now().isoformat(),
-            })
+            pnr_ref.set(not_found_payload)
         except Exception as fb_error:
             print(f"[PNR] Warning: Could not cache no_booking status to Firebase: {str(fb_error)}")
-        # Raise exception regardless of Firebase result
-        raise Exception(f"PNR {pnr} not found - no booking available")
-    
+        return not_found_payload
+
     pnr_data["status"] = "confirmed"
     pnr_data["created_at"] = datetime.now().isoformat()
     pnr_data["fetched_at"] = datetime.now().isoformat()
-    
-    # Store in Firebase
+
     pnr_ref.set(pnr_data)
     print(f"[PNR] Stored PNR data in Firebase")
-    
-    return _format_pnr_response(pnr_data)
+    return pnr_data
 
 
 async def _fetch_from_irctc(pnr: str) -> dict:
@@ -115,80 +133,75 @@ async def _fetch_from_irctc(pnr: str) -> dict:
             'x-rapidapi-host': IRCTC_API_HOST,
             'Content-Type': 'application/json'
         }
-        
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.get(
-                f"{IRCTC_API_BASE}/pnrStatus?pnr={pnr}",
-                headers=headers
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
-                print(f"[IRCTC] Successfully fetched PNR data: {data}")
-                
-                # Parse IRCTC response
-                if data.get("success"):
-                    irctc_data = data.get("data", {})
-                    # Get coach and berth from first passenger
-                    coach = "S1"
-                    berth = None
-                    all_berths = []
-                    
-                    if irctc_data.get("passengers"):
-                        # Extract all passengers/berths
-                        for idx, passenger in enumerate(irctc_data["passengers"]):
-                            # Parse currentStatus: "CNF B2 65" -> status=CNF, coach=B2, berth=65
-                            current_status = passenger.get("currentStatus", "")
-                            status_parts = current_status.split()
-                            
-                            berth_type = status_parts[0] if status_parts else "WL"  # CNF/RAC/WL
-                            coach_from_status = status_parts[1] if len(status_parts) > 1 else "S1"  # B2, S1, etc
-                            berth_num = status_parts[2] if len(status_parts) > 2 else f"WL{idx+1}"
-                            
-                            # Use berth from currentStatus first, then fallback to berth field
-                            if not berth_num or berth_num.startswith("WL"):
-                                berth_num = str(passenger.get("berth")) if passenger.get("berth") else f"WL{idx+1}"
-                            
-                            berth_data = {
-                                "berth_number": str(berth_num),
-                                "berth_type": berth_type,
-                                "passenger_name": passenger.get("name", f"Passenger {idx+1}"),
-                                "status": berth_type,
-                                "claimed_by": None,
-                                "claimed_at": None
-                            }
-                            all_berths.append(berth_data)
-                            
-                            print(f"[IRCTC] Parsed passenger {idx+1}: berth={berth_num}, coach={coach_from_status}, status={berth_type}")
-                        
-                        # First passenger's info
-                        first_passenger = irctc_data["passengers"][0]
-                        first_status = first_passenger.get("currentStatus", "")
-                        first_parts = first_status.split()
-                        coach = first_parts[1] if len(first_parts) > 1 else first_passenger.get("coach", "S1")
-                        berth = first_parts[2] if len(first_parts) > 2 else str(first_passenger.get("berth")) if first_passenger.get("berth") else None
-                    
-                    result = {
-                        "pnr": pnr,
-                        "train_number": irctc_data.get("trainNumber", "TBD"),
-                        "train_name": irctc_data.get("trainName", "Unknown Train"),
-                        "journey_date": _fix_journey_date(irctc_data.get("journeyDate", "TBD")),
-                        "coach": coach,
-                        "berth": berth,
-                        "from_station": irctc_data.get("source", irctc_data.get("boardingPoint", "TBD")),
-                        "to_station": irctc_data.get("destination", "TBD"),
-                        "departure": irctc_data.get("departureTime", "TBD"),
-                        "arrival": irctc_data.get("arrivalTime", "TBD"),
-                        "all_berths": all_berths,
-                    }
-                    print(f"[IRCTC] Parsed result with {len(all_berths)} berths: {result}")
-                    return result
-                else:
-                    print(f"[IRCTC] API returned success=false")
-                    return None
-            
-            print(f"[IRCTC] API returned status {response.status_code}, body: {response.text}")
+
+        client = await get_shared_http_client()
+        response = await client.get(
+            f"{IRCTC_API_BASE}/pnrStatus",
+            params={"pnr": pnr},
+            headers=headers
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            print(f"[IRCTC] Successfully fetched PNR data: {data}")
+
+            if data.get("success"):
+                irctc_data = data.get("data", {})
+                coach = "S1"
+                berth = None
+                all_berths = []
+
+                if irctc_data.get("passengers"):
+                    for idx, passenger in enumerate(irctc_data["passengers"]):
+                        current_status = passenger.get("currentStatus", "")
+                        status_parts = current_status.split()
+
+                        berth_type = status_parts[0] if status_parts else "WL"
+                        coach_from_status = status_parts[1] if len(status_parts) > 1 else "S1"
+                        berth_num = status_parts[2] if len(status_parts) > 2 else f"WL{idx+1}"
+
+                        if not berth_num or berth_num.startswith("WL"):
+                            berth_num = str(passenger.get("berth")) if passenger.get("berth") else f"WL{idx+1}"
+
+                        berth_data = {
+                            "berth_number": str(berth_num),
+                            "berth_type": berth_type,
+                            "passenger_name": passenger.get("name", f"Passenger {idx+1}"),
+                            "status": berth_type,
+                            "claimed_by": None,
+                            "claimed_at": None
+                        }
+                        all_berths.append(berth_data)
+
+                        print(f"[IRCTC] Parsed passenger {idx+1}: berth={berth_num}, coach={coach_from_status}, status={berth_type}")
+
+                    first_passenger = irctc_data["passengers"][0]
+                    first_status = first_passenger.get("currentStatus", "")
+                    first_parts = first_status.split()
+                    coach = first_parts[1] if len(first_parts) > 1 else first_passenger.get("coach", "S1")
+                    berth = first_parts[2] if len(first_parts) > 2 else str(first_passenger.get("berth")) if first_passenger.get("berth") else None
+
+                result = {
+                    "pnr": pnr,
+                    "train_number": irctc_data.get("trainNumber", "TBD"),
+                    "train_name": irctc_data.get("trainName", "Unknown Train"),
+                    "journey_date": _fix_journey_date(irctc_data.get("journeyDate", "TBD")),
+                    "coach": coach,
+                    "berth": berth,
+                    "from_station": irctc_data.get("source", irctc_data.get("boardingPoint", "TBD")),
+                    "to_station": irctc_data.get("destination", "TBD"),
+                    "departure": irctc_data.get("departureTime", "TBD"),
+                    "arrival": irctc_data.get("arrivalTime", "TBD"),
+                    "all_berths": all_berths,
+                }
+                print(f"[IRCTC] Parsed result with {len(all_berths)} berths: {result}")
+                return result
+
+            print(f"[IRCTC] API returned success=false")
             return None
+
+        print(f"[IRCTC] API returned status {response.status_code}, body: {response.text}")
+        return None
     except Exception as e:
         print(f"[IRCTC] Error fetching PNR: {str(e)}")
         import traceback

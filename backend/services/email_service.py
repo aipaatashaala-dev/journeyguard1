@@ -1,57 +1,239 @@
 """
-Email service for JourneyGuard
-Sends location-sharing links and journey notifications.
-Configure via environment variables:
-    EMAIL_HOST      smtp.gmail.com
-    EMAIL_PORT      587
-    EMAIL_USER      your@gmail.com
-    EMAIL_PASSWORD  your_app_password   (Gmail App Password)
-    EMAIL_FROM      JourneyGuard <your@gmail.com>
-    FRONTEND_URL    https://journeyguard.web.app
+Email service for JourneyGuard.
+
+SMTP configuration is read from environment variables:
+    EMAIL_HOST
+    EMAIL_PORT
+    EMAIL_USER
+    EMAIL_PASSWORD
+    EMAIL_FROM
 """
 
+import logging
 import os
 import smtplib
-import logging
+import ssl
+from datetime import datetime
+from email.header import Header
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-from datetime import datetime
+from email.utils import formataddr, parseaddr
+from html import escape
 
 logger = logging.getLogger(__name__)
 
-EMAIL_HOST     = os.getenv("EMAIL_HOST", "smtp.gmail.com")
-EMAIL_PORT     = int(os.getenv("EMAIL_PORT", 587))
-EMAIL_USER     = os.getenv("EMAIL_USER", "")
-EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_FROM     = os.getenv("EMAIL_FROM", f"JourneyGuard <{EMAIL_USER}>")
-FRONTEND_URL   = os.getenv("FRONTEND_URL", "https://journeyguard.in")
+
+def _email_settings() -> dict:
+    email_user = os.getenv("EMAIL_USER", "").strip()
+    return {
+        "host": os.getenv("EMAIL_HOST", "smtp.gmail.com").strip() or "smtp.gmail.com",
+        "port": int(os.getenv("EMAIL_PORT", 587) or 587),
+        "user": email_user,
+        "password": os.getenv("EMAIL_PASSWORD", ""),
+        "from_header": os.getenv("EMAIL_FROM", f"JourneyGuard <{email_user}>").strip() or f"JourneyGuard <{email_user}>",
+    }
+
+
+def _normalized_email(value: str | None) -> str:
+    return parseaddr(str(value or "").strip())[1].strip()
+
+
+def _formatted_from_header(from_header: str, fallback_email: str) -> str:
+    display_name, email_address = parseaddr(from_header)
+    safe_display_name = Header(display_name or "JourneyGuard", "utf-8").encode()
+    return formataddr((safe_display_name, email_address or fallback_email))
+
+
+def _render_email(
+    *,
+    title: str,
+    intro: str,
+    details: list[tuple[str, str]] | None = None,
+    note: str | None = None,
+    cta_label: str | None = None,
+    cta_href: str | None = None,
+    footer: str | None = None,
+) -> str:
+    rows = ""
+    for label, value in details or []:
+        rows += (
+            "<div class='row'>"
+            f"<span>{escape(str(label))}</span>"
+            f"<strong>{escape(str(value))}</strong>"
+            "</div>"
+        )
+
+    note_html = f"<div class='note'>{escape(note)}</div>" if note else ""
+    footer_html = f"<div class='footer'>{escape(footer)}</div>" if footer else ""
+    cta_html = ""
+    if cta_label and cta_href:
+        safe_href = escape(cta_href, quote=True)
+        cta_html = (
+            f"<a class='cta' href='{safe_href}' target='_blank' rel='noopener noreferrer'>"
+            f"{escape(cta_label)}</a>"
+            f"<div class='link'>{escape(cta_href)}</div>"
+        )
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body {{
+      margin: 0;
+      padding: 24px 12px;
+      background: #080d1a;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      color: #e5ecff;
+    }}
+    .wrapper {{
+      max-width: 560px;
+      margin: 0 auto;
+    }}
+    .card {{
+      background: #0f1829;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 18px;
+      padding: 28px 24px;
+      box-shadow: 0 18px 50px rgba(0, 0, 0, 0.25);
+    }}
+    .brand {{
+      font-size: 12px;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: #00e5c0;
+      font-weight: 700;
+      margin-bottom: 14px;
+    }}
+    h1 {{
+      margin: 0 0 10px;
+      font-size: 24px;
+      color: #f7faff;
+    }}
+    p {{
+      margin: 0 0 16px;
+      font-size: 14px;
+      line-height: 1.7;
+      color: #9bb0d1;
+    }}
+    .row {{
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 10px 0;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      font-size: 14px;
+    }}
+    .row span {{
+      color: #6d7f9c;
+    }}
+    .row strong {{
+      color: #00e5c0;
+      text-align: right;
+      font-weight: 700;
+    }}
+    .cta {{
+      display: block;
+      margin: 20px 0 10px;
+      padding: 14px 18px;
+      border-radius: 12px;
+      background: #00e5c0;
+      color: #08101d !important;
+      text-align: center;
+      font-weight: 800;
+      text-decoration: none;
+    }}
+    .link {{
+      background: #162237;
+      border: 1px solid rgba(0, 229, 192, 0.18);
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 12px;
+      line-height: 1.6;
+      color: #a7b8d5;
+      word-break: break-all;
+    }}
+    .note {{
+      margin-top: 18px;
+      border-radius: 12px;
+      padding: 14px;
+      background: rgba(0, 229, 192, 0.07);
+      border: 1px solid rgba(0, 229, 192, 0.18);
+      font-size: 13px;
+      line-height: 1.6;
+      color: #c6d5f0;
+    }}
+    .footer {{
+      margin-top: 18px;
+      font-size: 12px;
+      color: #667792;
+      text-align: center;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="card">
+      <div class="brand">JourneyGuard</div>
+      <h1>{escape(title)}</h1>
+      <p>{escape(intro)}</p>
+      {rows}
+      {cta_html}
+      {note_html}
+      {footer_html}
+    </div>
+  </div>
+</body>
+</html>
+"""
 
 
 def _send(to: str, subject: str, html_body: str) -> bool:
-    """Low-level send via SMTP."""
-    if not EMAIL_USER or not EMAIL_PASSWORD:
-        logger.warning("Email credentials not configured – skipping send")
+    settings = _email_settings()
+    recipient = _normalized_email(to)
+    email_user = settings["user"]
+    email_password = settings["password"]
+    email_from = _formatted_from_header(settings["from_header"], email_user)
+    email_host = settings["host"]
+    email_port = settings["port"]
+
+    if not recipient:
+        logger.warning("Email send skipped because recipient address is missing")
         return False
+
+    if not email_user or not email_password:
+        logger.warning("Email credentials not configured; skipping send to %s", recipient)
+        return False
+
     try:
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = EMAIL_FROM
-        msg["To"]      = to
-        msg.attach(MIMEText(html_body, "html"))
+        msg["Subject"] = Header(subject, "utf-8").encode()
+        msg["From"] = email_from
+        msg["To"] = recipient
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
 
-        with smtplib.SMTP(EMAIL_HOST, EMAIL_PORT) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(EMAIL_USER, EMAIL_PASSWORD)
-            server.sendmail(EMAIL_USER, to, msg.as_string())
-        logger.info(f"Email sent to {to}: {subject}")
+        tls_context = ssl.create_default_context()
+        if email_port == 465:
+            with smtplib.SMTP_SSL(email_host, email_port, timeout=20, context=tls_context) as server:
+                server.ehlo()
+                server.login(email_user, email_password)
+                server.sendmail(email_user, [recipient], msg.as_string())
+        else:
+            with smtplib.SMTP(email_host, email_port, timeout=20) as server:
+                server.ehlo()
+                server.starttls(context=tls_context)
+                server.ehlo()
+                server.login(email_user, email_password)
+                server.sendmail(email_user, [recipient], msg.as_string())
+
+        logger.info("Email sent to %s: %s", recipient, subject)
         return True
-    except Exception as e:
-        logger.error(f"Failed to send email to {to}: {e}")
+    except Exception:
+        logger.exception("Failed to send email to %s: %s", recipient, subject)
         return False
 
 
-# ── Tracking link email ───────────────────────────────────────────────────────
 def send_location_tracking_email(
     to_email: str,
     passenger_id: str,
@@ -59,91 +241,30 @@ def send_location_tracking_email(
     journey_date: str,
     tracking_link: str,
 ) -> bool:
-    subject = f"🛡️ JourneyGuard – Live Location Tracking Started"
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <style>
-    body {{ margin:0; padding:0; background:#080d1a; font-family:'Segoe UI',Arial,sans-serif; }}
-    .wrapper {{ max-width:560px; margin:0 auto; padding:32px 16px; }}
-    .card {{ background:#0f1829; border:1px solid rgba(255,255,255,0.07); border-radius:16px; overflow:hidden; }}
-    .header {{ background:#0a3d2e; padding:28px 32px; text-align:center; }}
-    .logo {{ display:inline-flex; align-items:center; gap:8px; }}
-    .logo-icon {{ width:36px; height:36px; background:#00e5c0; border-radius:9px; display:inline-flex; align-items:center; justify-content:center; font-size:18px; }}
-    .logo-text {{ font-size:20px; font-weight:800; color:#00e5c0; }}
-    .body {{ padding:28px 32px; }}
-    h2 {{ color:#eef2ff; font-size:1.3rem; margin:0 0 8px; }}
-    p {{ color:#94a3c4; font-size:0.9rem; line-height:1.65; margin:0 0 16px; }}
-    .info-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:20px 0; }}
-    .info-box {{ background:#172035; border-radius:10px; padding:12px; }}
-    .info-label {{ font-size:0.7rem; color:#556080; text-transform:uppercase; letter-spacing:.08em; }}
-    .info-value {{ font-size:0.95rem; font-weight:700; color:#00e5c0; margin-top:3px; }}
-    .cta {{ display:block; background:#00e5c0; color:#080d1a; text-decoration:none; text-align:center;
-            font-weight:800; font-size:1rem; padding:14px 24px; border-radius:10px; margin:20px 0; }}
-    .link-box {{ background:#172035; border:1px solid rgba(0,229,192,0.15); border-radius:8px;
-                 padding:10px 14px; font-size:0.78rem; color:#94a3c4; word-break:break-all; }}
-    .warning {{ background:rgba(245,158,11,0.08); border:1px solid rgba(245,158,11,0.2);
-                border-radius:8px; padding:12px; font-size:0.78rem; color:#f59e0b; margin-top:16px; }}
-    .footer {{ padding:16px 32px; border-top:1px solid rgba(255,255,255,0.05); text-align:center; }}
-    .footer p {{ font-size:0.72rem; color:#556080; margin:0; }}
-  </style>
-</head>
-<body>
-<div class="wrapper">
-  <div class="card">
-    <div class="header">
-      <div class="logo">
-        <span class="logo-icon">🛡</span>
-        <span class="logo-text">JourneyGuard</span>
-      </div>
-    </div>
-    <div class="body">
-      <h2>Live Location Tracking Active</h2>
-      <p>Your location is now being shared in real-time. Use the link below to track your journey or share it with family & friends.</p>
-
-      <div class="info-grid">
-        <div class="info-box">
-          <div class="info-label">Passenger ID</div>
-          <div class="info-value">{passenger_id}</div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Train</div>
-          <div class="info-value">{train_number}</div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Journey Date</div>
-          <div class="info-value">{journey_date}</div>
-        </div>
-        <div class="info-box">
-          <div class="info-label">Started</div>
-          <div class="info-value">{datetime.now().strftime('%H:%M')}</div>
-        </div>
-      </div>
-
-      <a href="{tracking_link}" class="cta">📍 Open Live Map</a>
-
-      <p style="font-size:0.8rem;color:#556080;margin-bottom:6px;">Or copy this link:</p>
-      <div class="link-box">{tracking_link}</div>
-
-      <div class="warning">
-        ⏱️ This link is active only during your journey. It will automatically expire when your journey ends or when you disable location sharing.
-      </div>
-    </div>
-    <div class="footer">
-      <p>JourneyGuard · Travel Protection Platform · This email was sent to {to_email}</p>
-    </div>
-  </div>
-</div>
-</body>
-</html>
-"""
+    subject = f"JourneyGuard | Live Location Tracking Started for Train {train_number}"
+    html = _render_email(
+        title="Live Location Tracking Started",
+        intro=(
+            "Your live location sharing is now active. Open the tracking link below "
+            "to follow the journey or share it with family and friends."
+        ),
+        details=[
+            ("Passenger ID", passenger_id),
+            ("Train", train_number),
+            ("Journey Date", journey_date),
+            ("Started At", datetime.now().strftime("%H:%M")),
+        ],
+        cta_label="Open Live Map",
+        cta_href=tracking_link,
+        note=(
+            "This link stays active only while the journey is in progress. "
+            "JourneyGuard expires it automatically when the trip ends or location sharing is turned off."
+        ),
+        footer=f"Sent to {to_email}",
+    )
     return _send(to_email, subject, html)
 
 
-# ── Journey start notification ────────────────────────────────────────────────
 def send_journey_start_email(
     to_email: str,
     passenger_id: str,
@@ -151,108 +272,53 @@ def send_journey_start_email(
     coach: str,
     journey_date: str,
 ) -> bool:
-    subject = f"🚂 JourneyGuard – Journey Started on Train {train_number}"
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body {{ margin:0; padding:0; background:#080d1a; font-family:'Segoe UI',Arial,sans-serif; }}
-    .wrapper {{ max-width:540px; margin:0 auto; padding:32px 16px; }}
-    .card {{ background:#0f1829; border:1px solid rgba(255,255,255,0.07); border-radius:16px; padding:28px 32px; }}
-    h2 {{ color:#eef2ff; font-size:1.2rem; margin:0 0 8px; }}
-    p {{ color:#94a3c4; font-size:0.88rem; line-height:1.65; margin:0 0 14px; }}
-    .row {{ display:flex; justify-content:space-between; padding:10px 0; border-bottom:1px solid rgba(255,255,255,0.05); font-size:0.88rem; }}
-    .row span:first-child {{ color:#556080; }}
-    .row span:last-child {{ color:#00e5c0; font-weight:700; }}
-    .tip {{ background:rgba(0,229,192,0.06); border:1px solid rgba(0,229,192,0.15); border-radius:8px; padding:12px; font-size:0.8rem; color:#94a3c4; margin-top:16px; }}
-    .footer {{ margin-top:20px; text-align:center; font-size:0.72rem; color:#556080; }}
-  </style>
-</head>
-<body>
-<div class="wrapper">
-  <div class="card">
-    <h2>🚂 Journey Started</h2>
-    <p>You have successfully joined your train group on JourneyGuard.</p>
-    <div class="row"><span>Passenger ID</span><span>{passenger_id}</span></div>
-    <div class="row"><span>Train</span><span>{train_number}</span></div>
-    <div class="row"><span>Coach</span><span>{coach}</span></div>
-    <div class="row"><span>Date</span><span>{journey_date}</span></div>
-    <div class="tip">💡 Enable Protection Mode and Location Sharing from your dashboard for full security coverage during travel.</div>
-    <div class="footer">JourneyGuard · {to_email}</div>
-  </div>
-</div>
-</body>
-</html>
-"""
+    subject = f"JourneyGuard | Journey Started on Train {train_number}"
+    html = _render_email(
+        title="Journey Started",
+        intro="You have successfully joined your train group on JourneyGuard.",
+        details=[
+            ("Passenger ID", passenger_id),
+            ("Train", train_number),
+            ("Coach", coach),
+            ("Journey Date", journey_date),
+        ],
+        note=(
+            "Enable Protection Mode and Location Sharing from your dashboard "
+            "for full coverage during travel."
+        ),
+        footer=f"Sent to {to_email}",
+    )
     return _send(to_email, subject, html)
 
 
-# ── Journey end notification ──────────────────────────────────────────────────
 def send_journey_end_email(to_email: str, passenger_id: str, train_number: str) -> bool:
-    subject = f"✅ JourneyGuard – Journey Ended | Location Link Expired"
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body {{ margin:0; padding:0; background:#080d1a; font-family:'Segoe UI',Arial,sans-serif; }}
-    .wrapper {{ max-width:540px; margin:0 auto; padding:32px 16px; }}
-    .card {{ background:#0f1829; border:1px solid rgba(255,255,255,0.07); border-radius:16px; padding:28px 32px; text-align:center; }}
-    .icon {{ font-size:3rem; margin-bottom:1rem; }}
-    h2 {{ color:#eef2ff; font-size:1.2rem; margin:0 0 8px; }}
-    p {{ color:#94a3c4; font-size:0.88rem; line-height:1.65; }}
-    .badge {{ display:inline-block; background:rgba(16,217,138,0.1); color:#10d98a; border:1px solid rgba(16,217,138,0.25); padding:5px 14px; border-radius:50px; font-size:0.78rem; font-weight:700; margin:12px 0; }}
-    .footer {{ margin-top:20px; font-size:0.72rem; color:#556080; }}
-  </style>
-</head>
-<body>
-<div class="wrapper">
-  <div class="card">
-    <div class="icon">🏁</div>
-    <h2>Journey Completed</h2>
-    <div class="badge">✓ Location Link Expired</div>
-    <p>Your journey on Train {train_number} has ended. Your live location tracking link has been automatically deactivated and is no longer accessible.</p>
-    <p style="margin-top:12px;">Thank you for travelling with JourneyGuard, {passenger_id}.</p>
-    <div class="footer">JourneyGuard · {to_email}</div>
-  </div>
-</div>
-</body>
-</html>
-"""
+    subject = f"JourneyGuard | Journey Completed for Train {train_number}"
+    html = _render_email(
+        title="Journey Completed",
+        intro=(
+            f"Your journey on train {train_number} has been marked as completed, "
+            "and the live location link has been expired."
+        ),
+        details=[
+            ("Passenger ID", passenger_id),
+            ("Train", train_number),
+        ],
+        note="Thank you for travelling with JourneyGuard.",
+        footer=f"Sent to {to_email}",
+    )
     return _send(to_email, subject, html)
 
 
 def send_admin_otp_email(to_email: str, otp: str, expires_minutes: int = 10) -> bool:
-    subject = "JourneyGuard Admin OTP"
-    html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <style>
-    body {{ margin:0; padding:0; background:#080d1a; font-family:'Segoe UI',Arial,sans-serif; }}
-    .wrapper {{ max-width:540px; margin:0 auto; padding:32px 16px; }}
-    .card {{ background:#0f1829; border:1px solid rgba(255,255,255,0.07); border-radius:16px; padding:28px 32px; }}
-    h2 {{ color:#eef2ff; font-size:1.25rem; margin:0 0 10px; }}
-    p {{ color:#94a3c4; font-size:0.9rem; line-height:1.65; margin:0 0 14px; }}
-    .otp {{ margin:20px 0; padding:16px; border-radius:12px; background:#172035; text-align:center; font-size:2rem; letter-spacing:.35em; font-weight:800; color:#00e5c0; }}
-    .note {{ background:rgba(0,229,192,0.06); border:1px solid rgba(0,229,192,0.15); border-radius:8px; padding:12px; font-size:0.8rem; color:#94a3c4; margin-top:16px; }}
-  </style>
-</head>
-<body>
-  <div class="wrapper">
-    <div class="card">
-      <h2>JourneyGuard Admin Login</h2>
-      <p>Use the one-time password below to complete your admin sign in.</p>
-      <div class="otp">{otp}</div>
-      <p>This OTP expires in {expires_minutes} minutes.</p>
-      <div class="note">If you did not request this code, you can ignore this email.</div>
-    </div>
-  </div>
-</body>
-</html>
-"""
+    subject = "JourneyGuard | Admin OTP"
+    html = _render_email(
+        title="Admin Sign In OTP",
+        intro="Use the one-time password below to complete your JourneyGuard admin sign in.",
+        details=[
+            ("OTP", otp),
+            ("Expires In", f"{expires_minutes} minutes"),
+        ],
+        note="If you did not request this code, you can safely ignore this email.",
+        footer=f"Sent to {to_email}",
+    )
     return _send(to_email, subject, html)

@@ -7,6 +7,38 @@ from dependencies import get_current_user
 router = APIRouter()
 
 
+def _normalize_display_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(str(value).strip().split())[:40]
+    return normalized or None
+
+
+def _sync_active_journey_profile(uid: str, display_name: str | None = None):
+    if not display_name:
+        return
+
+    journey_ref = fb_db.reference(f"user_journeys/{uid}")
+    journey = journey_ref.get() or {}
+    if not isinstance(journey, dict):
+        return
+
+    journey_ref.update({
+        "display_name": display_name,
+    })
+
+    group_id = journey.get("group_id")
+    if not group_id:
+        return
+
+    member_ref = fb_db.reference(f"train_groups/{group_id}/members/{uid}")
+    member = member_ref.get() or {}
+    if isinstance(member, dict) and member.get("passenger_id"):
+        member_ref.update({
+            "display_name": display_name,
+        })
+
+
 @router.post("/register")
 async def register(body: RegisterRequest):
     """
@@ -27,6 +59,7 @@ async def register(body: RegisterRequest):
     # Store non-sensitive profile
     fb_db.reference(f"users/{user.uid}").set({
         "email"        : body.email,
+        "display_name" : body.email.split("@")[0],
         "created_at"   : int(time.time() * 1000),
     })
 
@@ -43,16 +76,21 @@ async def me(current_user: dict = Depends(get_current_user)):
 
 @router.put("/profile")
 async def update_profile(body: UpdateUserProfileRequest, current_user: dict = Depends(get_current_user)):
-    """Update user profile information (email)."""
+    """Update user profile information."""
     uid = current_user["uid"]
     
     # Build update data - only include non-None fields
     updates = {}
     if body.email:
         updates["email"] = body.email
+    display_name = _normalize_display_name(body.display_name)
+    if display_name:
+        updates["display_name"] = display_name
     
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    updates["updated_at"] = int(time.time() * 1000)
     
     try:
         # Update Firebase DB
@@ -61,6 +99,9 @@ async def update_profile(body: UpdateUserProfileRequest, current_user: dict = De
         # If email changed, also update Firebase Auth
         if body.email and body.email != current_user.get("email"):
             fb_auth.update_user(uid, email=body.email)
+        if display_name:
+            fb_auth.update_user(uid, display_name=display_name)
+            _sync_active_journey_profile(uid, display_name)
         
         return {
             "message": "Profile updated successfully",

@@ -42,28 +42,26 @@ async def claim_berth(pnr: str, request: ClaimBerthRequest, current_user: dict =
     try:
         user_id = current_user.get("uid")
         berth_number = request.berth_number.strip()
-        
-        # Check if berth is already claimed
         claims_ref = fb_db.reference(f"pnr_berth_claims/{pnr}/{berth_number}")
-        existing_claim = claims_ref.get()
-        
-        if existing_claim and existing_claim.get("claimed_by") != user_id:
-            # Berth already claimed by another user
-            claimed_user = existing_claim.get("claimed_by", "Unknown")
-            raise HTTPException(
-                status_code=409, 
-                detail=f"Berth {berth_number} is already selected by another user"
-            )
-        
-        # Claim the berth
         claim_data = {
             "pnr": pnr,
             "berth_number": berth_number,
             "claimed_by": user_id,
             "claimed_at": datetime.now().isoformat(),
         }
-        
-        claims_ref.set(claim_data)
+
+        def claim_if_available(current):
+            if current and current.get("claimed_by") not in (None, "", user_id):
+                return current
+            return claim_data
+
+        final_claim = claims_ref.transaction(claim_if_available)
+        if final_claim and final_claim.get("claimed_by") != user_id:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Berth {berth_number} is already selected by another user"
+            )
+
         print(f"[PNR] User {user_id} claimed berth {berth_number} for PNR {pnr}")
         
         # Also store in user's journey data

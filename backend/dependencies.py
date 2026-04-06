@@ -4,11 +4,13 @@ Shared dependencies: Firebase JWT verification, DB access.
 import base64
 import json
 import os
+import time
 from pathlib import Path
 from fastapi import Header, HTTPException, status
 from dotenv import load_dotenv
 import firebase_admin
 from firebase_admin import credentials, auth as fb_auth, db as fb_db
+from services.runtime_controls import TTLCache
 
 # ── Firebase Admin init ──────────────────────────────────────────────────────
 _BASE_DIR = Path(__file__).resolve().parent
@@ -16,6 +18,7 @@ _DEFAULT_FIREBASE_CREDENTIALS_PATH = _BASE_DIR / "firebase-credentials.json"
 load_dotenv(dotenv_path=_BASE_DIR / ".env", override=False)
 
 _firebase_app = None
+_verified_token_cache = TTLCache(max_size=4096)
 
 
 def _decode_unverified_token(token: str) -> dict:
@@ -93,6 +96,15 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth header")
     token = authorization.split(" ", 1)[1]
+
+    cached_user = _verified_token_cache.get(token)
+    if cached_user:
+        exp = int(cached_user.get("exp", 0) or 0)
+        if exp <= int(time.time()) + 15:
+            _verified_token_cache.pop(token, None)
+        else:
+            return cached_user
+
     try:
         get_firebase_app()
     except Exception as e:
@@ -117,6 +129,9 @@ async def get_current_user(authorization: str = Header(...)) -> dict:
 
     try:
         decoded = fb_auth.verify_id_token(token)
+        exp = int(decoded.get("exp", 0) or 0)
+        ttl_seconds = min(240, max(15, exp - int(time.time()) - 15)) if exp else 60
+        _verified_token_cache.set(token, decoded, ttl_seconds=ttl_seconds)
         return decoded
     except fb_auth.ExpiredIdTokenError:
         raise HTTPException(status_code=401, detail="Token expired")

@@ -5,8 +5,12 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
   GoogleAuthProvider,
+  EmailAuthProvider,
   signOut,
   onAuthStateChanged,
+  reauthenticateWithCredential,
+  reauthenticateWithPopup,
+  updatePassword,
 } from 'firebase/auth';
 
 const AuthContext = createContext(null);
@@ -38,10 +42,39 @@ export function AuthProvider({ children }) {
   const loginWithGoogle = () =>
     signInWithPopup(auth, createGoogleProvider());
 
+  const changePassword = async ({ currentPassword = '', newPassword }) => {
+    const activeUser = auth.currentUser;
+    if (!activeUser) {
+      throw new Error('No authenticated user');
+    }
+
+    const providerIds = new Set(
+      (activeUser.providerData || [])
+        .map((provider) => provider?.providerId)
+        .filter(Boolean)
+    );
+
+    if (providerIds.has('password')) {
+      if (!currentPassword) {
+        throw new Error('Current password is required');
+      }
+      if (!activeUser.email) {
+        throw new Error('No account email found');
+      }
+
+      const credential = EmailAuthProvider.credential(activeUser.email, currentPassword);
+      await reauthenticateWithCredential(activeUser, credential);
+    } else if (providerIds.has('google.com')) {
+      await reauthenticateWithPopup(activeUser, createGoogleProvider());
+    }
+
+    await updatePassword(activeUser, newPassword);
+  };
+
   const logout = () => signOut(auth);
 
   return (
-    <AuthContext.Provider value={{ user, loading, register, login, loginWithGoogle, logout }}>
+    <AuthContext.Provider value={{ user, loading, register, login, loginWithGoogle, changePassword, logout }}>
       {!loading && children}
     </AuthContext.Provider>
   );

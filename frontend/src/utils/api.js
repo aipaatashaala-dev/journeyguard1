@@ -33,9 +33,12 @@ const readStoredJourneySnapshot = () => {
       coach_id: coachId,
       train_number: stored.trainNumber,
       train_name: stored.trainName || '',
+      display_name: stored.displayName || '',
       journey_date: stored.journeyDate,
       coach,
       berth: stored.seat || stored.berth || '',
+      berth_status: stored.berthStatus || '',
+      join_mode: stored.joinMode || '',
       seat: stored.seat || stored.berth || '',
       passenger_id: localStorage.getItem('jg_passenger_id') || '',
     };

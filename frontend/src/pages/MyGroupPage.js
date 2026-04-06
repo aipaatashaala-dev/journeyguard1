@@ -46,9 +46,12 @@ export default function MyGroupPage() {
         const currentJourney = {
           trainNumber: journey.train_number,
           trainName: journey.train_name || storedJourney.trainName || '',
+          displayName: journey.display_name || storedJourney.displayName || '',
           journeyDate: journey.journey_date,
           coach,
           seat: journey.berth || journey.seat || '',
+          berthStatus: journey.berth_status || storedJourney.berthStatus || '',
+          joinMode: journey.join_mode || storedJourney.joinMode || '',
         };
         localStorage.setItem('jg_journey', JSON.stringify(currentJourney));
         localStorage.setItem('jg_group_id', journey.group_id);
@@ -69,6 +72,7 @@ export default function MyGroupPage() {
           journeyDate: currentJourney.journeyDate,
           coach: currentJourney.coach,
           seat: currentJourney.seat || '-',
+          berthStatus: currentJourney.berthStatus || '',
           members: groupRes.data?.passengers || [],
         });
       } catch (error) {
@@ -126,7 +130,9 @@ export default function MyGroupPage() {
         journey_date: lastJourney.journeyDate,
         coach: lastJourney.coach || 'general',
         berth: lastJourney.seat || lastJourney.berth || '',
+        berth_status: lastJourney.berthStatus || null,
         arrival_time: lastJourney.arrivalTime || null,
+        join_mode: lastJourney.joinMode || null,
       });
 
       localStorage.setItem('jg_journey', JSON.stringify(lastJourney));
@@ -136,7 +142,8 @@ export default function MyGroupPage() {
       toast.success('Group rejoined');
       navigate(`/group/${lastJourney.trainNumber}_${lastJourney.journeyDate}/${res.data?.coach_id || TRAIN_GROUP_CHANNEL_ID}`);
     } catch (error) {
-      toast.error(error?.response?.data?.detail || 'Could not rejoin group');
+      const detail = error?.response?.data?.detail;
+      toast.error(typeof detail === 'string' ? detail : detail?.message || 'Could not rejoin group');
     } finally {
       setSubmitting(false);
     }
@@ -197,6 +204,10 @@ export default function MyGroupPage() {
               <div className="stat-tile">
                 <div style={{ fontSize: '0.78rem', color: '#6a7c99', marginBottom: 4 }}>Seat</div>
                 <div style={{ fontWeight: 800 }}>{group.seat}</div>
+              </div>
+              <div className="stat-tile">
+                <div style={{ fontSize: '0.78rem', color: '#6a7c99', marginBottom: 4 }}>Booking</div>
+                <div style={{ fontWeight: 800 }}>{group.berthStatus || '-'}</div>
               </div>
               <div className="stat-tile">
                 <div style={{ fontSize: '0.78rem', color: '#6a7c99', marginBottom: 4 }}>Passengers in train group</div>

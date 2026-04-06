@@ -30,6 +30,7 @@ export default function DashboardPage() {
     journeyDate: formatDate(new Date()),
     coach: '',
     seat: '',
+    berthStatus: 'CONFIRMED',
   });
   const [general, setGeneral] = useState({
     trainNumber: '',
@@ -70,6 +71,7 @@ export default function DashboardPage() {
         journeyDate: journey.journeyDate || prev.journeyDate,
         coach: journey.coach || prev.coach,
         seat: journey.seat || prev.seat,
+        berthStatus: journey.berthStatus || prev.berthStatus,
       }));
       setGeneral((prev) => ({
         ...prev,
@@ -101,9 +103,12 @@ export default function DashboardPage() {
         const nextJourney = {
           trainNumber: serverJourney.train_number,
           trainName: serverJourney.train_name || storedJourney.trainName || '',
+          displayName: serverJourney.display_name || storedJourney.displayName || '',
           journeyDate: serverJourney.journey_date,
           coach: serverJourney.coach || 'general',
           seat: serverJourney.berth || serverJourney.seat || '',
+          berthStatus: serverJourney.berth_status || storedJourney.berthStatus || '',
+          joinMode: serverJourney.join_mode || storedJourney.joinMode || '',
         };
 
         localStorage.setItem('jg_journey', JSON.stringify(nextJourney));
@@ -145,7 +150,15 @@ export default function DashboardPage() {
     return `/group/${groupId}/${coachKey}`;
   };
 
-  const joinBackgroundGroup = async ({ trainNumber, journeyDate, coach = 'general', berth = '', arrivalTime = null }) => {
+  const joinBackgroundGroup = async ({
+    trainNumber,
+    journeyDate,
+    coach = 'general',
+    berth = '',
+    arrivalTime = null,
+    berthStatus = null,
+    joinMode = null,
+  }) => {
     if (!trainNumber || !journeyDate) {
       toast.error('Train number and date are required');
       throw new Error('validation');
@@ -164,13 +177,20 @@ export default function DashboardPage() {
         coach,
         berth,
         arrival_time: arrivalTime,
+        berth_status: berthStatus,
+        join_mode: joinMode,
       }),
     });
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
-      toast.error(err.detail || 'Could not join train group');
-      throw new Error('join_failed');
+      const detail = err?.detail;
+      const message = typeof detail === 'string' ? detail : detail?.message || 'Could not join train group';
+      const error = new Error(message);
+      error.code = detail?.code || err?.code || 'join_failed';
+      error.status = res.status;
+      error.detail = detail;
+      throw error;
     }
 
     const data = await res.json();
@@ -228,7 +248,7 @@ export default function DashboardPage() {
 
   const handleManualModalSubmit = async (e) => {
     e.preventDefault();
-    const { trainNumber, journeyDate, coach, seat } = manual;
+    const { trainNumber, journeyDate, coach, seat, berthStatus } = manual;
     if (!trainNumber || !journeyDate || !coach || !seat) {
       toast.error('Fill all journey fields');
       return;
@@ -247,9 +267,12 @@ export default function DashboardPage() {
       const journey = {
         trainNumber,
         trainName: manualTrainDetails?.train_name || '',
+        displayName: '',
         journeyDate,
         coach,
         seat,
+        berthStatus,
+        joinMode: 'manual',
       };
       const joinData = await joinBackgroundGroup({
         trainNumber,
@@ -257,14 +280,25 @@ export default function DashboardPage() {
         coach,
         berth: seat,
         arrivalTime: manualTrainDetails?.arrival || null,
+        berthStatus,
+        joinMode: 'manual',
       });
+      journey.displayName = joinData?.display_name || '';
       toast.success('Joined your train group.');
       setManualTrainDetails(null);
       setManualTrainConfirmed(false);
       setShowManualModal(false);
       await handleJoinSuccess(journey, joinData?.coach_id);
     } catch (err) {
-      if (err.message !== 'validation' && err.message !== 'join_failed') {
+      if (err.code === 'manual_seat_conflict') {
+        const shouldSwitchToRac = window.confirm(
+          'This coach and seat already exist for another passenger. Click OK if this is an RAC ticket and we will switch this manual entry to RAC. Click Cancel to recheck the details.'
+        );
+        if (shouldSwitchToRac) {
+          setManual((prev) => ({ ...prev, berthStatus: 'RAC' }));
+          toast('Manual entry switched to RAC. Submit once more to join.');
+        }
+      } else if (err.message !== 'validation' && err.message !== 'join_failed') {
         toast.error(err.message);
       }
     } finally {
@@ -293,17 +327,22 @@ export default function DashboardPage() {
       const journey = {
         trainNumber,
         trainName: generalTrainDetails?.train_name || '',
+        displayName: '',
         journeyDate,
         coach: 'general',
         berth: '',
         seat: '',
+        berthStatus: '',
+        joinMode: 'general',
       };
       const joinData = await joinBackgroundGroup({
         trainNumber,
         journeyDate,
         coach: 'general',
         arrivalTime: generalTrainDetails?.arrival || null,
+        joinMode: 'general',
       });
+      journey.displayName = joinData?.display_name || '';
       toast.success('Joined the train group.');
       setGeneralTrainDetails(null);
       setGeneralTrainConfirmed(false);
@@ -363,9 +402,12 @@ export default function DashboardPage() {
       const journey = {
         trainNumber: pnrDetails.train_number,
         trainName: pnrDetails.train_name || '',
+        displayName: '',
         journeyDate: pnrJourneyDate,
         coach: pnrDetails.coach || 'general',
         seat: selectedBerth,
+        berthStatus: '',
+        joinMode: 'pnr',
       };
 
       const joinData = await joinBackgroundGroup({
@@ -374,7 +416,9 @@ export default function DashboardPage() {
         coach: journey.coach,
         berth: journey.seat,
         arrivalTime: pnrDetails?.arrival || null,
+        joinMode: 'pnr',
       });
+      journey.displayName = joinData?.display_name || '';
 
       toast.success('PNR matched and train group joined.');
       setPnr('');
@@ -498,6 +542,7 @@ export default function DashboardPage() {
               <div><strong>Date</strong><div>{currentJourney.journeyDate}</div></div>
               <div><strong>Coach</strong><div>{currentJourney.coach || 'general'}</div></div>
               <div><strong>Seat</strong><div>{currentJourney.seat || '-'}</div></div>
+              <div><strong>Booking</strong><div>{currentJourney.berthStatus || '-'}</div></div>
               <div><strong>Next step</strong><div>Open your group</div></div>
             </div>
 
@@ -593,7 +638,7 @@ export default function DashboardPage() {
       </div>
 
       {showManualModal && (
-        <JourneyModal title="Manual Coach Entry" subtitle="Fill in the train, coach, and berth you want to join." onClose={closeManualModal}>
+        <JourneyModal title="Manual Coach Entry" subtitle="Fill in the train, coach, berth, and whether it is Confirmed or RAC." onClose={closeManualModal}>
           <form onSubmit={handleManualModalSubmit} style={{ display: 'grid', gap: '1rem' }}>
             <input className="input" value={manual.trainNumber} onChange={(e) => setManual({ ...manual, trainNumber: e.target.value.toUpperCase() })} placeholder="Train number" required />
             <input className="input" type="date" value={manual.journeyDate} onChange={(e) => setManual({ ...manual, journeyDate: e.target.value })} required />
@@ -620,6 +665,28 @@ export default function DashboardPage() {
             <div className="manual-seat-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
               <input className="input" value={manual.coach} onChange={(e) => setManual({ ...manual, coach: e.target.value.toUpperCase() })} placeholder="Coach" required />
               <input className="input" value={manual.seat} onChange={(e) => setManual({ ...manual, seat: e.target.value.toUpperCase() })} placeholder="Seat" required />
+            </div>
+            <div className="glass-card" style={{ padding: '0.95rem' }}>
+              <div style={{ fontSize: '0.82rem', color: 'var(--text2)', marginBottom: '0.65rem' }}>Seat status</div>
+              <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+                {[
+                  ['CONFIRMED', 'Confirmed berth'],
+                  ['RAC', 'RAC'],
+                ].map(([value, label]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={`action-chip ${manual.berthStatus === value ? 'active' : ''}`}
+                    onClick={() => setManual({ ...manual, berthStatus: value })}
+                    style={{
+                      background: manual.berthStatus === value ? 'rgba(32,50,79,0.12)' : undefined,
+                      color: manual.berthStatus === value ? '#20324f' : undefined,
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
             </div>
             <button type="submit" className="btn btn-primary" disabled={loading || !manualTrainDetails || !manualTrainConfirmed} style={{ justifyContent: 'center' }}>
               {loading ? <span className="spinner" /> : 'Confirm and Join Train Group'}

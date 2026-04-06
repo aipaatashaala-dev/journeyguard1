@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
 import {
+  PenSquare,
   ArrowLeft,
   Send,
   Trash2,
@@ -30,6 +31,7 @@ import {
   updateRequest,
 } from '../utils/api';
 import { API_BASE_URL } from '../utils/config';
+import { saveDisplayName as persistDisplayName } from '../utils/displayName';
 import {
   DEFAULT_GEOLOCATION_OPTIONS,
   getGeolocationErrorMessage,
@@ -49,6 +51,7 @@ const REQ_TYPES = [
   { id: 'SYSTEM', label: 'Journey update', icon: <TrainFront size={14} />, color: '#3657c8' },
   { id: 'CHAT', label: 'Message', icon: <MessageSquare size={14} />, color: 'var(--text2)' },
 ];
+const MESSAGE_EDIT_WINDOW_MS = 5 * 60 * 1000;
 
 export default function GroupPage() {
   const { journeyId, coachId } = useParams();
@@ -59,12 +62,18 @@ export default function GroupPage() {
   const [replyTo, setReplyTo] = useState(null);
   const [selectedReq, setSelectedReq] = useState(null);
   const [messageText, setMessageText] = useState('');
+  const [editingMessageId, setEditingMessageId] = useState('');
+  const [editingMessageText, setEditingMessageText] = useState('');
+  const [savingMessageEdit, setSavingMessageEdit] = useState(false);
   const [sending, setSending] = useState(false);
   const [sharingLocation, setSharingLocation] = useState(false);
   const [locationLink, setLocationLink] = useState('');
   const [locationMessageId, setLocationMessageId] = useState('');
   const [currentLocation, setCurrentLocation] = useState(null);
   const [trainInfo, setTrainInfo] = useState(null);
+  const [editingIdentityName, setEditingIdentityName] = useState(false);
+  const [identityNameDraft, setIdentityNameDraft] = useState('');
+  const [identityNameSaving, setIdentityNameSaving] = useState(false);
   const lastMessageIdRef = useRef(null);
   const bottomRef = useRef(null);
   const watchRef = useRef(null);
@@ -74,6 +83,7 @@ export default function GroupPage() {
 
   const storedPassengerId = localStorage.getItem('jg_passenger_id');
   const journeyData = JSON.parse(localStorage.getItem('jg_journey') || '{}');
+  const localDisplayName = String(journeyData?.displayName || '').trim();
   const myPassengerId = storedPassengerId || journeyData.passengerId || `Passenger-${user?.uid?.slice(-4) || 'guest'}`;
   const trainNumber = journeyId?.split('_')[0];
   const groupName = formatTrainGroupName(trainInfo?.train_name || journeyData?.trainName, trainNumber);
@@ -95,12 +105,46 @@ export default function GroupPage() {
     });
     return map;
   }, [passengers]);
+  const currentPassenger = useMemo(
+    () => passengerByUid[user?.uid] || null,
+    [passengerByUid, user?.uid]
+  );
+  const currentDisplayName = currentPassenger?.display_name || journeyData?.displayName || myPassengerId;
+  const currentIdentityMeta = formatSenderMeta(
+    currentPassenger?.coach || journeyData?.coach || 'general',
+    currentPassenger?.berth || journeyData?.seat || journeyData?.berth || '',
+    currentPassenger?.berth_status || journeyData?.berthStatus || ''
+  );
+  const racSeatPartner = useMemo(() => {
+    const myCoach = String(journeyData?.coach || '').trim().toUpperCase();
+    const mySeat = String(journeyData?.seat || journeyData?.berth || '').trim().toUpperCase();
+    const myStatus = String(journeyData?.berthStatus || '').trim().toUpperCase();
+
+    if (!user?.uid || myStatus !== 'RAC' || !myCoach || !mySeat) {
+      return null;
+    }
+
+    return (
+      passengers.find((passenger) =>
+        passenger.uid !== user.uid &&
+        String(passenger.coach || '').trim().toUpperCase() === myCoach &&
+        String(passenger.berth || '').trim().toUpperCase() === mySeat &&
+        String(passenger.berth_status || '').trim().toUpperCase() === 'RAC'
+      ) || null
+    );
+  }, [journeyData?.berth, journeyData?.berthStatus, journeyData?.coach, journeyData?.seat, passengers, user?.uid]);
 
   useEffect(() => {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
+
+  useEffect(() => {
+    if (!editingIdentityName) {
+      setIdentityNameDraft(currentDisplayName || '');
+    }
+  }, [currentDisplayName, editingIdentityName]);
 
   useEffect(() => {
     const loadTrainInfo = async () => {
@@ -159,7 +203,24 @@ export default function GroupPage() {
           return;
         }
 
-        const memberList = groupData?.passengers || [];
+        const storedJourney = JSON.parse(localStorage.getItem('jg_journey') || '{}');
+        localStorage.setItem('jg_journey', JSON.stringify({
+          ...storedJourney,
+          trainNumber: journeyDataResp.journey.train_number || storedJourney.trainNumber || '',
+          trainName: journeyDataResp.journey.train_name || storedJourney.trainName || '',
+          displayName: journeyDataResp.journey.display_name || storedJourney.displayName || '',
+          journeyDate: journeyDataResp.journey.journey_date || storedJourney.journeyDate || '',
+          coach: journeyDataResp.journey.coach || storedJourney.coach || 'general',
+          seat: journeyDataResp.journey.berth || journeyDataResp.journey.seat || storedJourney.seat || '',
+          berthStatus: journeyDataResp.journey.berth_status || storedJourney.berthStatus || '',
+          joinMode: journeyDataResp.journey.join_mode || storedJourney.joinMode || '',
+        }));
+
+        const memberList = (groupData?.passengers || []).map((passenger) =>
+          passenger.uid === user?.uid && localDisplayName
+            ? { ...passenger, display_name: localDisplayName }
+            : passenger
+        );
         if (!memberList.some((passenger) => passenger.uid === user?.uid)) {
           handleGroupUnavailable('You are no longer part of this train group.');
           return;
@@ -167,7 +228,13 @@ export default function GroupPage() {
 
         setPassengers(memberList);
 
-        const activeMessages = (requestData?.requests || []).filter((item) => item.type !== 'AI');
+        const activeMessages = (requestData?.requests || [])
+          .filter((item) => item.type !== 'AI')
+          .map((item) =>
+            item.uid === user?.uid && localDisplayName
+              ? { ...item, display_name: localDisplayName }
+              : item
+          );
         setMessages(activeMessages);
 
         if (
@@ -177,9 +244,10 @@ export default function GroupPage() {
         ) {
           if ('Notification' in window && Notification.permission === 'granted') {
             const latest = activeMessages[activeMessages.length - 1];
+            const latestPassenger = memberList.find((passenger) => passenger.uid === latest.uid) || {};
             const rt = getReqType(latest.type, reqTypeMap);
             new Notification('New update in your train group', {
-              body: `${latest.passenger_id}: ${latest.message || rt.label}`,
+              body: `${getMessageSenderName(latest, latestPassenger)}: ${latest.message || rt.label}`,
               icon: '/favicon.ico',
             });
           }
@@ -206,7 +274,7 @@ export default function GroupPage() {
       active = false;
       window.clearInterval(intervalId);
     };
-  }, [journeyId, coachId, navigate, user, reqTypeMap]);
+  }, [coachId, journeyId, localDisplayName, navigate, reqTypeMap, user]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -228,7 +296,7 @@ export default function GroupPage() {
     setSending(true);
     try {
       const replyHeader = replyTo
-        ? `Replying to ${replyTo.passenger_id}: ${replyTo.message || getReqType(replyTo.type, reqTypeMap).label}\n`
+        ? `Replying to ${getMessageSenderName(replyTo, passengerByUid[replyTo.uid] || {})}: ${replyTo.message || getReqType(replyTo.type, reqTypeMap).label}\n`
         : '';
 
       await sendRequest({
@@ -266,6 +334,46 @@ export default function GroupPage() {
   const sendAcceptedReply = async (message) => {
     setSelectedReq('CHAT');
     await sendMessage(`Accepted: ${message}`);
+  };
+
+  const startEditingMessage = (message) => {
+    setEditingMessageId(message.id);
+    setEditingMessageText(message.message || '');
+    setReplyTo(null);
+  };
+
+  const cancelEditingMessage = () => {
+    setEditingMessageId('');
+    setEditingMessageText('');
+  };
+
+  const saveEditedMessage = async (message) => {
+    const nextMessage = editingMessageText.trim();
+    if (!nextMessage) {
+      toast.error('Enter a message');
+      return;
+    }
+
+    setSavingMessageEdit(true);
+    try {
+      const res = await updateRequest(journeyId, coachId, message.id, {
+        message: nextMessage,
+      });
+      const updatedMessage = res.data?.request || {};
+      setMessages((prev) =>
+        prev.map((item) =>
+          item.id === message.id
+            ? { ...item, ...updatedMessage, message: nextMessage }
+            : item
+        )
+      );
+      cancelEditingMessage();
+      toast.success('Message updated');
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Could not edit this message');
+    } finally {
+      setSavingMessageEdit(false);
+    }
   };
 
   const stopLocationShare = async (announce = true) => {
@@ -436,6 +544,55 @@ export default function GroupPage() {
     toast.success('Tracking link copied');
   };
 
+  const draftRacSeatMessage = () => {
+    if (!racSeatPartner) return;
+    const seatLabel = [journeyData?.coach, journeyData?.seat || journeyData?.berth].filter(Boolean).join('-');
+    setSelectedReq('CHAT');
+    setReplyTo(null);
+    setMessageText(
+      `Hi ${getMessageSenderName(racSeatPartner)}, I am your RAC seat partner for ${seatLabel}. Let's coordinate here.`
+    );
+  };
+
+  const saveIdentityName = async () => {
+    const displayName = identityNameDraft.trim();
+    if (!displayName) {
+      toast.error('Enter the name you want to show in the group');
+      return;
+    }
+    if (displayName.length > 40) {
+      toast.error('Name must be 40 characters or fewer');
+      return;
+    }
+
+    setIdentityNameSaving(true);
+    try {
+      const savedName = await persistDisplayName(displayName);
+
+      setPassengers((prev) =>
+        prev.map((passenger) =>
+          passenger.uid === user?.uid
+            ? { ...passenger, display_name: savedName }
+            : passenger
+        )
+      );
+      setMessages((prev) =>
+        prev.map((message) =>
+          message.uid === user?.uid
+            ? { ...message, display_name: savedName }
+            : message
+        )
+      );
+
+      setEditingIdentityName(false);
+      toast.success('Group name updated');
+    } catch (error) {
+      toast.error(error?.message || 'Could not update group name');
+    } finally {
+      setIdentityNameSaving(false);
+    }
+  };
+
   return (
     <div className="page-shell train-group-page">
       <div className="container section-stack" style={{ maxWidth: 980 }}>
@@ -459,12 +616,65 @@ export default function GroupPage() {
               <div className="action-chip" style={{ cursor: 'default' }}>
                 Your coach: {(journeyData?.coach || 'general').toString().toUpperCase()}
               </div>
+              {journeyData?.berthStatus && (
+                <div className="action-chip" style={{ cursor: 'default' }}>
+                  {journeyData.berthStatus}
+                </div>
+              )}
               <div className="action-chip" style={{ cursor: 'default' }}>
                 <Users size={15} />
                 {passengers.length} members
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="glass-card" style={{ padding: '1rem', display: 'grid', gap: '0.8rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 6 }}>Your group name</div>
+              <div style={{ fontSize: '1.08rem', fontWeight: 800, marginBottom: 4 }}>
+                {currentDisplayName}
+              </div>
+              <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
+                {currentIdentityMeta}
+              </div>
+            </div>
+            <button
+              className="action-chip"
+              onClick={() => setEditingIdentityName((value) => !value)}
+            >
+              <PenSquare size={14} />
+              {editingIdentityName ? 'Cancel' : 'Edit name'}
+            </button>
+          </div>
+
+          {editingIdentityName && (
+            <div style={{ display: 'grid', gap: '0.75rem' }}>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  className="input"
+                  type="text"
+                  value={identityNameDraft}
+                  onChange={(e) => setIdentityNameDraft(e.target.value)}
+                  placeholder="Enter your name for this group"
+                  maxLength={40}
+                  style={{ flex: 1, minWidth: 220 }}
+                />
+                <button
+                  className="btn btn-primary"
+                  onClick={saveIdentityName}
+                  disabled={identityNameSaving}
+                  style={{ minWidth: 130, justifyContent: 'center' }}
+                >
+                  {identityNameSaving ? 'Saving...' : 'Save Name'}
+                </button>
+              </div>
+              <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
+                Your chosen name will show in the group, and your coach and berth details will stay underneath it.
+              </div>
+            </div>
+          )}
         </div>
 
         {locationLink && (
@@ -494,6 +704,28 @@ export default function GroupPage() {
                   Open latest pin
                 </a>
               )}
+            </div>
+          </div>
+        )}
+
+        {racSeatPartner && (
+          <div className="glass-card" style={{ padding: '1rem', display: 'grid', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span className="badge" style={{ background: 'rgba(217,119,6,0.12)', color: '#b45309' }}>
+                RAC Match
+              </span>
+              <strong>{getMessageSenderName(racSeatPartner)}</strong>
+              <span style={{ color: 'var(--text2)' }}>
+                is sharing coach {(journeyData?.coach || '').toString().toUpperCase()} seat {(journeyData?.seat || journeyData?.berth || '').toString().toUpperCase()}.
+              </span>
+            </div>
+            <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
+              You can message each other here to coordinate the shared RAC seat.
+            </div>
+            <div>
+              <button className="btn btn-secondary btn-sm" onClick={draftRacSeatMessage}>
+                Message RAC Partner
+              </button>
             </div>
           </div>
         )}
@@ -547,17 +779,28 @@ export default function GroupPage() {
               messages.map((message, idx) => {
                 const type = getReqType(message.type, reqTypeMap);
                 const isMine = message.uid === user?.uid;
-                const seatSlot = getSeatSlot(`${message.passenger_id}-${message.uid || ''}`);
                 const passenger = passengerByUid[message.uid] || {};
                 const senderCoach = message.coach || passenger.coach || '';
                 const senderBerth = message.berth || passenger.berth || '';
-                const seatHint = [senderCoach, senderBerth].filter(Boolean).join('-') || seatSlot.toUpperCase();
+                const senderBerthStatus = message.berth_status || passenger.berth_status || '';
+                const senderName = getMessageSenderName(message, passenger);
+                const senderMeta = type.id === 'SYSTEM'
+                  ? 'JourneyGuard system update'
+                  : formatSenderMeta(senderCoach, senderBerth, senderBerthStatus);
                 const isAccepted =
                   type.id !== 'CHAT' &&
                   messages.some(
                     (other) =>
                       other.message === `Accepted: ${message.message || type.label}` && other.uid !== message.uid
                   );
+                const isEditingThisMessage = editingMessageId === message.id;
+                const canEditMessage =
+                  isMine &&
+                  !isAccepted &&
+                  !isEditingThisMessage &&
+                  type.id !== 'SYSTEM' &&
+                  type.id !== 'LOCATION' &&
+                  isMessageEditable(message.timestamp);
 
                 return (
                   <div
@@ -565,38 +808,60 @@ export default function GroupPage() {
                     className={`coach-message-row ${isMine ? 'mine' : 'other'}`}
                     style={{ animationDelay: `${Math.min(idx * 40, 400)}ms` }}
                   >
-                    <div className={`seat-anchor ${isMine ? 'mine' : 'other'}`}>
-                      <span className="seat-label">{seatHint}</span>
-                    </div>
-
                     <div className={`message-bubble ${isMine ? 'mine' : 'other'}`}>
                       <div className="message-head">
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                          <strong>{message.passenger_id}</strong>
-                          {senderCoach && (
-                            <span className="badge" style={{ background: 'rgba(32,50,79,0.08)', color: '#20324f' }}>
-                              Coach {senderCoach}
-                            </span>
-                          )}
-                          <span className="badge" style={{ background: `${type.color}20`, color: type.color }}>
-                            {type.label}
-                          </span>
-                          {isAccepted && (
-                            <span className="badge badge-success">
-                              <CheckCircle2 size={12} />
-                              Accepted
-                            </span>
-                          )}
+                        <div className="message-sender-block">
+                          <strong className="message-sender-name">{senderName}</strong>
+                          <div className="message-sender-meta">{senderMeta}</div>
                         </div>
-                        <span style={{ color: 'var(--text3)', fontSize: '0.78rem' }}>
+                        <span className="message-time">
                           {formatMessageTime(message.timestamp)}
+                          {message.edited_at ? ' • edited' : ''}
                         </span>
                       </div>
 
-                      {type.id === 'LOCATION' && message.lat && message.lng ? (
+                      <div className="message-chip-row">
+                        <span className="badge" style={{ background: `${type.color}18`, color: type.color }}>
+                          {type.label}
+                        </span>
+                        {isAccepted && (
+                          <span className="badge badge-success">
+                            <CheckCircle2 size={12} />
+                            Accepted
+                          </span>
+                        )}
+                      </div>
+
+                      {isEditingThisMessage ? (
+                        <div style={{ display: 'grid', gap: '0.65rem' }}>
+                          <textarea
+                            className="input"
+                            value={editingMessageText}
+                            onChange={(e) => setEditingMessageText(e.target.value)}
+                            rows={3}
+                            style={{ resize: 'vertical', minHeight: 88 }}
+                          />
+                          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                            <button
+                              className="action-chip"
+                              onClick={() => saveEditedMessage(message)}
+                              disabled={savingMessageEdit}
+                            >
+                              {savingMessageEdit ? 'Saving...' : 'Save'}
+                            </button>
+                            <button
+                              className="action-chip"
+                              onClick={cancelEditingMessage}
+                              disabled={savingMessageEdit}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : type.id === 'LOCATION' && message.lat && message.lng ? (
                         <LocationMessageCard message={message} />
                       ) : (
-                        <div style={{ color: '#111827', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>
+                        <div className="message-text">
                           {renderMessageBody(message.message || type.label)}
                         </div>
                       )}
@@ -613,10 +878,22 @@ export default function GroupPage() {
                           </button>
                         )}
                         {isMine && (
-                          <button className="action-chip" onClick={() => deleteMessage(message)}>
-                            <Trash2 size={14} />
-                            Delete
-                          </button>
+                          <>
+                            {canEditMessage && (
+                              <button className="action-chip" onClick={() => startEditingMessage(message)}>
+                                <PenSquare size={14} />
+                                Edit
+                              </button>
+                            )}
+                            <button
+                              className="action-chip"
+                              onClick={() => deleteMessage(message)}
+                              disabled={isEditingThisMessage}
+                            >
+                              <Trash2 size={14} />
+                              Delete
+                            </button>
+                          </>
                         )}
                       </div>
                     </div>
@@ -631,7 +908,7 @@ export default function GroupPage() {
             <div className="glass-card" style={{ padding: '0.9rem', marginTop: '1rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
-                  Replying to <strong style={{ color: 'var(--text)' }}>{replyTo.passenger_id}</strong>: {replyTo.message || getReqType(replyTo.type, reqTypeMap).label}
+                  Replying to <strong style={{ color: 'var(--text)' }}>{getMessageSenderName(replyTo, passengerByUid[replyTo.uid] || {})}</strong>: {replyTo.message || getReqType(replyTo.type, reqTypeMap).label}
                 </div>
                 <button className="action-chip" onClick={() => setReplyTo(null)}>
                   Cancel reply
@@ -696,6 +973,12 @@ export default function GroupPage() {
 
 function getReqType(type, reqTypeMap) {
   return reqTypeMap[type] || { id: 'CHAT', label: 'Message', color: 'var(--text2)' };
+}
+
+function isMessageEditable(timestamp) {
+  const value = Number(timestamp);
+  if (!Number.isFinite(value)) return false;
+  return Date.now() - value <= MESSAGE_EDIT_WINDOW_MS;
 }
 
 function formatMessageTime(timestamp) {
@@ -785,13 +1068,36 @@ function LocationMessageCard({ message }) {
   );
 }
 
-function getSeatSlot(seedText) {
-  const slots = ['l1', 'l2', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6'];
-  const seed = (seedText || 'seat').toString();
-  let hash = 0;
-  for (let i = 0; i < seed.length; i += 1) {
-    hash = (hash * 31 + seed.charCodeAt(i)) >>> 0;
+function getMessageSenderName(message, passenger = {}) {
+  return (
+    passenger?.display_name ||
+    message?.display_name ||
+    message?.passenger_id ||
+    passenger?.passenger_id ||
+    'Traveler'
+  );
+}
+
+function formatSenderMeta(coach, berth, berthStatus) {
+  const coachValue = String(coach || '').trim();
+  const berthValue = String(berth || '').trim();
+  const berthStatusValue = String(berthStatus || '').trim().toUpperCase();
+
+  if (coachValue.toLowerCase() === 'general') {
+    return 'General passenger';
   }
-  return slots[hash % slots.length];
+
+  const parts = [];
+  if (coachValue) {
+    parts.push(`Coach ${coachValue.toUpperCase()}`);
+  }
+  if (berthValue) {
+    parts.push(`Berth ${berthValue.toUpperCase()}`);
+  }
+  if (berthStatusValue) {
+    parts.push(berthStatusValue);
+  }
+
+  return parts.join(' • ') || 'Train passenger';
 }
 

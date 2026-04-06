@@ -104,6 +104,7 @@ export default function AuthPage() {
 
       await set(ref(db, `users/${uid}`), {
         email: form.email,
+        display_name: form.email.split('@')[0],
         created_at: Date.now(),
       });
 

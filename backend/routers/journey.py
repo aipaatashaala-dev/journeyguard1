@@ -14,6 +14,7 @@ router = APIRouter()
 _group_monitor_lock = threading.Lock()
 _group_monitor_events: dict[str, threading.Event] = {}
 _FALLBACK_GROUP_RETENTION_HOURS = 24
+TRAIN_GROUP_CHANNEL_ID = "train_chat"
 
 
 def _group_id(train: str, date: str) -> str:
@@ -21,7 +22,7 @@ def _group_id(train: str, date: str) -> str:
 
 
 def _coach_id(coach: str) -> str:
-    return f"coach_{coach}"
+    return TRAIN_GROUP_CHANNEL_ID
 
 
 def _current_user_journey(uid: str) -> dict:
@@ -143,7 +144,7 @@ def _compute_delay_minutes(journey_date: str, scheduled_arrival: str | None, exp
     return max(0, int((expected_dt - scheduled_dt).total_seconds() // 60))
 
 
-def _group_coach_ids(group_id: str) -> list[str]:
+def _legacy_group_coach_ids(group_id: str) -> list[str]:
     group_data = fb_db.reference(f"train_groups/{group_id}").get() or {}
     return [
         key for key, value in group_data.items()
@@ -151,20 +152,82 @@ def _group_coach_ids(group_id: str) -> list[str]:
     ]
 
 
+def _list_group_members(group_id: str) -> list[dict]:
+    group_data = fb_db.reference(f"train_groups/{group_id}").get() or {}
+    members: dict[str, dict] = {}
+
+    members_node = group_data.get("members")
+    if isinstance(members_node, dict):
+        for uid, info in members_node.items():
+            if isinstance(info, dict) and info.get("passenger_id"):
+                members[uid] = {"uid": uid, **info}
+
+    for coach_id in _legacy_group_coach_ids(group_id):
+        coach_data = group_data.get(coach_id) or {}
+        if not isinstance(coach_data, dict):
+            continue
+        for uid, info in coach_data.items():
+            if uid == "requests" or uid in members:
+                continue
+            if isinstance(info, dict) and info.get("passenger_id"):
+                members[uid] = {"uid": uid, **info}
+
+    passengers = list(members.values())
+    passengers.sort(
+        key=lambda item: (
+            str(item.get("coach") or "").upper(),
+            str(item.get("berth") or "").upper(),
+            str(item.get("passenger_id") or "").upper(),
+        )
+    )
+    return passengers
+
+
+def _get_group_member(group_id: str, uid: str, coach_id_hint: str | None = None) -> dict | None:
+    member = fb_db.reference(f"train_groups/{group_id}/members/{uid}").get()
+    if isinstance(member, dict) and member.get("passenger_id"):
+        return member
+
+    if coach_id_hint:
+        legacy_member = fb_db.reference(f"train_groups/{group_id}/{coach_id_hint}/{uid}").get()
+        if isinstance(legacy_member, dict) and legacy_member.get("passenger_id"):
+            return legacy_member
+
+    for legacy_coach_id in _legacy_group_coach_ids(group_id):
+        legacy_member = fb_db.reference(f"train_groups/{group_id}/{legacy_coach_id}/{uid}").get()
+        if isinstance(legacy_member, dict) and legacy_member.get("passenger_id"):
+            return legacy_member
+
+    return None
+
+
+def _remove_group_member(group_id: str, uid: str, coach_id_hint: str | None = None):
+    fb_db.reference(f"train_groups/{group_id}/members/{uid}").delete()
+
+    checked = set()
+    if coach_id_hint:
+        checked.add(coach_id_hint)
+        fb_db.reference(f"train_groups/{group_id}/{coach_id_hint}/{uid}").delete()
+
+    for legacy_coach_id in _legacy_group_coach_ids(group_id):
+        if legacy_coach_id in checked:
+            continue
+        fb_db.reference(f"train_groups/{group_id}/{legacy_coach_id}/{uid}").delete()
+
+
 def _post_system_message(group_id: str, message_key: str, message_text: str, timestamp_ms: int | None = None):
     timestamp_ms = timestamp_ms or int(time.time() * 1000)
-    for coach_id in _group_coach_ids(group_id):
-        message_ref = fb_db.reference(f"train_groups/{group_id}/{coach_id}/requests/{message_key}")
-        existing = message_ref.get() or {}
-        message_ref.set({
-            "passenger_id": "JourneyGuard Updates",
-            "type": "SYSTEM",
-            "message": message_text,
-            "timestamp": existing.get("timestamp", timestamp_ms),
-            "uid": "journeyguard-system",
-            "active": True,
-            "is_system": True,
-        })
+    message_ref = fb_db.reference(f"train_groups/{group_id}/requests/{message_key}")
+    existing = message_ref.get() or {}
+    message_ref.set({
+        "passenger_id": "JourneyGuard Updates",
+        "type": "SYSTEM",
+        "message": message_text,
+        "timestamp": existing.get("timestamp", timestamp_ms),
+        "uid": "journeyguard-system",
+        "active": True,
+        "is_system": True,
+    })
 
 
 def _clear_group_user_journeys(group_id: str):
@@ -422,16 +485,27 @@ async def get_current_journey(user: dict = Depends(get_current_user)):
     if not group_id or not coach_id:
         return {"journey": None}
 
-    membership = fb_db.reference(f"train_groups/{group_id}/{coach_id}/{uid}").get()
+    membership = _get_group_member(group_id, uid, coach_id)
     if not membership:
         fb_db.reference(f"user_journeys/{uid}").delete()
         return {"journey": None}
+
+    synced_fields = {}
+    if journey.get("coach_id") != TRAIN_GROUP_CHANNEL_ID:
+        synced_fields["coach_id"] = TRAIN_GROUP_CHANNEL_ID
+    for field in ("coach", "berth", "passenger_id"):
+        if membership.get(field) and journey.get(field) != membership.get(field):
+            synced_fields[field] = membership.get(field)
+
+    if synced_fields:
+        fb_db.reference(f"user_journeys/{uid}").update(synced_fields)
+        journey = {**journey, **synced_fields}
 
     return {
         "journey": {
             **journey,
             "group_id": group_id,
-            "coach_id": coach_id,
+            "coach_id": journey.get("coach_id", TRAIN_GROUP_CHANNEL_ID),
             "seat": journey.get("berth", ""),
         }
     }
@@ -462,7 +536,11 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
     email      = user.get("email", "")
     group_id   = _group_id(body.train_number, body.journey_date)
     coach_id   = _coach_id(body.coach)
-    passenger_id = f"Passenger {body.coach}-{body.berth}"
+    coach_value = (body.coach or "general").strip() or "general"
+    coach_value = "general" if coach_value.lower() == "general" else coach_value.upper()
+    berth_value = (body.berth or "").strip().upper()
+    passenger_coach_label = "General" if coach_value == "general" else coach_value
+    passenger_id = f"Passenger {passenger_coach_label}-{berth_value}" if berth_value else f"Passenger {passenger_coach_label}"
     fallback_cleanup_at = _parse_group_cleanup_time(
         body.journey_date,
         body.arrival_time,
@@ -475,13 +553,13 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         old_group = existing.get("group_id")
         old_coach = existing.get("coach_id")
         if old_group and old_coach:
-            fb_db.reference(f"train_groups/{old_group}/{old_coach}/{uid}").delete()
+            _remove_group_member(old_group, uid, old_coach)
 
     # Join new group — anonymous record only
-    fb_db.reference(f"train_groups/{group_id}/{coach_id}/{uid}").set({
+    fb_db.reference(f"train_groups/{group_id}/members/{uid}").set({
         "passenger_id": passenger_id,
-        "coach"       : body.coach,
-        "berth"       : body.berth,
+        "coach"       : coach_value,
+        "berth"       : berth_value,
         "joined_at"   : int(time.time() * 1000),
     })
 
@@ -493,8 +571,8 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         "passenger_id": passenger_id,
         "train_number": body.train_number,
         "journey_date": body.journey_date,
-        "coach"       : body.coach,
-        "berth"       : body.berth,
+        "coach"       : coach_value,
+        "berth"       : berth_value,
         "started_at"  : join_time,
         "arrival_time": body.arrival_time,
         "cleanup_at"  : None,
@@ -531,7 +609,7 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
 
     # Send welcome email (non-blocking – fire and forget)
     try:
-        send_journey_start_email(email, passenger_id, body.train_number, body.coach, body.journey_date)
+        send_journey_start_email(email, passenger_id, body.train_number, coach_value, body.journey_date)
     except Exception:
         pass
 
@@ -556,13 +634,9 @@ async def leave_journey(journey_id: str, user: dict = Depends(get_current_user))
     train    = journey.get("train_number", "")
 
     # Remove from group
-    fb_db.reference(f"train_groups/{journey_id}/{coach_id}/{uid}").delete()
+    _remove_group_member(journey_id, uid, coach_id)
 
-    remaining_nodes = fb_db.reference(f"train_groups/{journey_id}/{coach_id}").get() or {}
-    remaining_passengers = [
-        info for key, info in remaining_nodes.items()
-        if key != "requests" and isinstance(info, dict) and info.get("passenger_id")
-    ]
+    remaining_passengers = _list_group_members(journey_id)
     if not remaining_passengers:
         _delete_group_and_chats(journey_id)
 
@@ -635,14 +709,14 @@ async def get_coach_group(journey_id: str, coach_id: str, user: dict = Depends(g
     journey = _current_user_journey(user["uid"])
     if not journey:
         raise HTTPException(status_code=404, detail="No active journey")
-    if journey.get("group_id") != journey_id or journey.get("coach_id") != coach_id:
-        raise HTTPException(status_code=403, detail="Not your coach group")
+    if journey.get("group_id") != journey_id:
+        raise HTTPException(status_code=403, detail="Not your journey group")
+
+    membership = _get_group_member(journey_id, user["uid"], journey.get("coach_id"))
+    if not membership:
+        fb_db.reference(f"user_journeys/{user['uid']}").delete()
+        raise HTTPException(status_code=404, detail="No active journey")
 
     _ensure_group_monitor(journey_id)
-    data = fb_db.reference(f"train_groups/{journey_id}/{coach_id}").get() or {}
-    passengers = [
-        {"uid": uid, **info}
-        for uid, info in data.items()
-        if uid != "requests" and isinstance(info, dict)
-    ]
-    return {"journey_id": journey_id, "coach_id": coach_id, "passengers": passengers}
+    passengers = _list_group_members(journey_id)
+    return {"journey_id": journey_id, "coach_id": TRAIN_GROUP_CHANNEL_ID, "passengers": passengers}

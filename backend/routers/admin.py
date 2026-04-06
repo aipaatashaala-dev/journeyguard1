@@ -89,6 +89,69 @@ def require_admin(authorization: str = Header(...)) -> dict:
     return _verify_admin_token(authorization.split(" ", 1)[1].strip())
 
 
+def _collect_group_members(group_data: dict) -> list[dict]:
+    members: dict[str, dict] = {}
+
+    members_node = group_data.get("members")
+    if isinstance(members_node, dict):
+        for uid, value in members_node.items():
+            if isinstance(value, dict) and value.get("passenger_id"):
+                members[uid] = {"uid": uid, **value}
+
+    for coach_id, coach_data in group_data.items():
+        if not coach_id.startswith("coach_") or not isinstance(coach_data, dict):
+            continue
+        for uid, value in coach_data.items():
+            if uid == "requests" or uid in members:
+                continue
+            if isinstance(value, dict) and value.get("passenger_id"):
+                members[uid] = {"uid": uid, **value}
+
+    return list(members.values())
+
+
+def _coach_count(group_data: dict, members: list[dict]) -> int:
+    coaches = {
+        str(member.get("coach") or "").strip().upper()
+        for member in members
+        if str(member.get("coach") or "").strip()
+    }
+    if coaches:
+        return len(coaches)
+    return sum(
+        1
+        for coach_id, coach_data in group_data.items()
+        if coach_id.startswith("coach_") and isinstance(coach_data, dict)
+    )
+
+
+def _collect_group_requests(group_id: str, group_data: dict) -> list[tuple[str, dict, str]]:
+    requests: list[tuple[str, dict, str]] = []
+
+    root_requests = group_data.get("requests")
+    if isinstance(root_requests, dict):
+        for req_id, req_data in root_requests.items():
+            if isinstance(req_data, dict):
+                requests.append((req_id, req_data, f"train_groups/{group_id}/requests/{req_id}"))
+
+    for coach_id, coach_data in group_data.items():
+        if not isinstance(coach_data, dict):
+            continue
+        if coach_id.startswith("coach_"):
+            coach_requests = coach_data.get("requests")
+            if not isinstance(coach_requests, dict):
+                continue
+            for req_id, req_data in coach_requests.items():
+                if isinstance(req_data, dict):
+                    requests.append((req_id, req_data, f"train_groups/{group_id}/{coach_id}/requests/{req_id}"))
+        elif coach_id == "emergency_alerts":
+            for req_id, req_data in coach_data.items():
+                if isinstance(req_data, dict):
+                    requests.append((req_id, req_data, f"train_groups/{group_id}/emergency_alerts/{req_id}"))
+
+    return requests
+
+
 @router.post("/request-otp")
 async def request_admin_otp(body: AdminOtpRequest):
     email = body.email.strip().lower()
@@ -180,6 +243,7 @@ async def delete_user(uid: str, _: dict = Depends(require_admin)):
         for group_id, group_data in groups.items():
             if not isinstance(group_data, dict):
                 continue
+            fb_db.reference(f"train_groups/{group_id}/members/{uid}").delete()
             for coach_id, coach_data in group_data.items():
                 if coach_id == "metadata" or not isinstance(coach_data, dict):
                     continue

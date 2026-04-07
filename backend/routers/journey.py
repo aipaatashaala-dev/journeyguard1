@@ -24,6 +24,29 @@ def _group_id(train: str, date: str) -> str:
     return f"{train}_{date}"
 
 
+def _existing_group_dates_for_train(train_number: str, limit_days: int = 3) -> list[str]:
+    try:
+        groups = fb_db.reference("train_groups").get() or {}
+    except Exception:
+        return []
+
+    dates: list[str] = []
+    prefix = f"{str(train_number).strip()}_"
+    now = datetime.now().date()
+    for group_id in groups.keys():
+        if not isinstance(group_id, str) or not group_id.startswith(prefix):
+            continue
+        raw_date = group_id[len(prefix):].strip()
+        try:
+            parsed = datetime.strptime(raw_date, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if abs((parsed - now).days) <= limit_days:
+            dates.append(raw_date)
+
+    return sorted(set(dates))
+
+
 def _coach_id(coach: str) -> str:
     return TRAIN_GROUP_CHANNEL_ID
 
@@ -619,7 +642,23 @@ async def fetch_train_info(
         raise HTTPException(status_code=422, detail="Journey date is required")
 
     try:
-        return await get_train_info(train_number.strip(), journey_date.strip(), refresh=refresh)
+        requested_date = journey_date.strip()
+        train_info = await get_train_info(train_number.strip(), requested_date, refresh=refresh)
+        existing_dates = _existing_group_dates_for_train(train_number.strip())
+
+        candidate_dates = [date for date in [train_info.run_date, requested_date, *existing_dates] if date]
+        deduped_candidate_dates = list(dict.fromkeys(candidate_dates))
+        requires_selection = (
+            bool(train_info.run_date)
+            and train_info.run_date != requested_date
+            and len(deduped_candidate_dates) > 1
+        )
+
+        payload = train_info.model_dump()
+        payload["requested_journey_date"] = requested_date
+        payload["requires_run_date_selection"] = requires_selection
+        payload["run_date_options"] = deduped_candidate_dates if requires_selection else [train_info.run_date or requested_date]
+        return TrainInfoResponse(**payload)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except Exception as exc:

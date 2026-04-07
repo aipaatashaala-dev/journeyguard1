@@ -50,6 +50,26 @@ def _fix_journey_date(journey_date: str) -> str:
         return journey_date
 
 
+def _normalize_journey_date(journey_date: str) -> str:
+    raw = str(journey_date or "").strip()
+    if not raw:
+        return raw
+
+    fixed = _fix_journey_date(raw)
+    parts = fixed.split("-")
+    if len(parts) != 3:
+        return fixed
+
+    try:
+        if len(parts[0]) == 4:
+            parsed = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
+        else:
+            parsed = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+        return parsed.strftime("%Y-%m-%d")
+    except Exception:
+        return fixed
+
+
 async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) -> PNRDetailsResponse:
     """
     Get PNR details and store in Firebase.
@@ -65,6 +85,8 @@ async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) 
         if local_cached:
             if local_cached.get("status") == "no_booking":
                 raise Exception(f"PNR {pnr} not found - no booking available")
+            if local_cached.get("status") == "provider_error":
+                raise Exception(local_cached.get("error_message") or "UPSTREAM_ERROR: PNR provider unavailable")
             return _format_pnr_response(local_cached)
 
     async def load():
@@ -76,6 +98,8 @@ async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) 
         )
         if result.get("status") == "no_booking":
             raise Exception(f"PNR {pnr} not found - no booking available")
+        if result.get("status") == "provider_error":
+            raise Exception(result.get("error_message") or "UPSTREAM_ERROR: PNR provider unavailable")
         return _format_pnr_response(result)
 
     if refresh:
@@ -86,6 +110,11 @@ async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) 
 async def _get_pnr_details_uncached(pnr: str, refresh: bool = False) -> dict:
     pnr_ref = fb_db.reference(f"pnr_data/{pnr}")
     existing_pnr = pnr_ref.get()
+    has_cached_payload = bool(
+        existing_pnr
+        and existing_pnr.get("train_number")
+        and existing_pnr.get("journey_date")
+    )
 
     if not refresh and existing_pnr and existing_pnr.get("fetched_at"):
         fetched_time = datetime.fromisoformat(existing_pnr.get("fetched_at", ""))
@@ -94,6 +123,9 @@ async def _get_pnr_details_uncached(pnr: str, refresh: bool = False) -> dict:
             print(f"[PNR] Found recent cached PNR data (age: {cache_age/60:.1f} minutes)")
             return existing_pnr
         print(f"[PNR] Cache expired (age: {cache_age/3600:.1f} hours), fetching fresh data")
+    elif not refresh and has_cached_payload:
+        print("[PNR] Found cached PNR data without fetched_at, using stored database payload")
+        return existing_pnr
     elif refresh:
         print(f"[PNR] Force refresh requested, fetching fresh data from IRCTC")
 
@@ -101,6 +133,9 @@ async def _get_pnr_details_uncached(pnr: str, refresh: bool = False) -> dict:
     pnr_data = await _fetch_from_irctc(pnr)
 
     if not pnr_data:
+        if has_cached_payload:
+            print("[PNR] IRCTC returned no data, falling back to stored database payload")
+            return existing_pnr
         print(f"[PNR] IRCTC API returned no data - PNR not found")
         not_found_payload = {
             "pnr": pnr,
@@ -113,6 +148,17 @@ async def _get_pnr_details_uncached(pnr: str, refresh: bool = False) -> dict:
         except Exception as fb_error:
             print(f"[PNR] Warning: Could not cache no_booking status to Firebase: {str(fb_error)}")
         return not_found_payload
+
+    if pnr_data.get("status") == "provider_error":
+        if has_cached_payload:
+            print("[PNR] Provider error, falling back to stored database payload")
+            return existing_pnr
+        pnr_data["fetched_at"] = datetime.now().isoformat()
+        try:
+            pnr_ref.set(pnr_data)
+        except Exception as fb_error:
+            print(f"[PNR] Warning: Could not cache provider error to Firebase: {str(fb_error)}")
+        return pnr_data
 
     pnr_data["status"] = "confirmed"
     pnr_data["created_at"] = datetime.now().isoformat()
@@ -185,7 +231,7 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                     "pnr": pnr,
                     "train_number": irctc_data.get("trainNumber", "TBD"),
                     "train_name": irctc_data.get("trainName", "Unknown Train"),
-                    "journey_date": _fix_journey_date(irctc_data.get("journeyDate", "TBD")),
+                    "journey_date": _normalize_journey_date(irctc_data.get("journeyDate", "TBD")),
                     "coach": coach,
                     "berth": berth,
                     "from_station": irctc_data.get("source", irctc_data.get("boardingPoint", "TBD")),
@@ -197,16 +243,37 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                 print(f"[IRCTC] Parsed result with {len(all_berths)} berths: {result}")
                 return result
 
-            print(f"[IRCTC] API returned success=false")
-            return None
+            provider_message = (
+                data.get("message")
+                or data.get("error")
+                or data.get("msg")
+                or "PNR provider returned no booking data"
+            )
+            print(f"[IRCTC] API returned success=false: {provider_message}")
+            if "not found" in provider_message.lower() or "no booking" in provider_message.lower() or "flushed" in provider_message.lower():
+                return None
+            return {
+                "pnr": pnr,
+                "status": "provider_error",
+                "error_message": f"UPSTREAM_ERROR: {provider_message}",
+            }
 
-        print(f"[IRCTC] API returned status {response.status_code}, body: {response.text}")
-        return None
+        body_preview = response.text[:300]
+        print(f"[IRCTC] API returned status {response.status_code}, body: {body_preview}")
+        return {
+            "pnr": pnr,
+            "status": "provider_error",
+            "error_message": f"UPSTREAM_ERROR: PNR API returned {response.status_code}",
+        }
     except Exception as e:
         print(f"[IRCTC] Error fetching PNR: {str(e)}")
         import traceback
         traceback.print_exc()
-        return None
+        return {
+            "pnr": pnr,
+            "status": "provider_error",
+            "error_message": f"UPSTREAM_ERROR: {str(e)}",
+        }
 
 
 def _generate_mock_pnr(pnr: str) -> dict:

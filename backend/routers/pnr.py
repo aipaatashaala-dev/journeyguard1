@@ -19,6 +19,12 @@ async def get_pnr(pnr: str, refresh: bool = False, current_user: dict = Depends(
     except Exception as e:
         error_msg = str(e)
         print(f"[PNR_ROUTER] Exception caught: {error_msg}")
+
+        if "UPSTREAM_ERROR:" in error_msg:
+            raise HTTPException(
+                status_code=502,
+                detail=error_msg.replace("UPSTREAM_ERROR:", "").strip() or "PNR provider is unavailable right now."
+            )
         
         # Check if it's a no-booking error
         if "not found" in error_msg.lower() or "no booking" in error_msg.lower() or "flushed" in error_msg.lower():

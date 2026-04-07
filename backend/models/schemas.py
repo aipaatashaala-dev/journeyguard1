@@ -110,6 +110,7 @@ class TrainInfoResponse(BaseModel):
     train_number: str
     journey_date: str
     run_date: Optional[str] = None
+    requested_journey_date: Optional[str] = None
     train_name: Optional[str] = None
     from_station: Optional[str] = None
     to_station: Optional[str] = None
@@ -123,6 +124,19 @@ class TrainInfoResponse(BaseModel):
     cancelled: bool = False
     route_changed: bool = False
     api_message: Optional[str] = None
+    route_stations: Optional[List["TrainRouteStation"]] = None
+    requires_run_date_selection: bool = False
+    run_date_options: Optional[List[str]] = None
+
+
+class TrainRouteStation(BaseModel):
+    index: int
+    name: str
+    code: Optional[str] = None
+    arrival: Optional[str] = None
+    departure: Optional[str] = None
+    platform: Optional[str] = None
+    distance_km: Optional[str] = None
 
 
 # ── PNR Multi-Berth ─────────────────────────────────────────────────────────

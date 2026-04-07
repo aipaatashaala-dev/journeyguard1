@@ -219,6 +219,63 @@ def _extract_route_summary(payload):
     return None
 
 
+def _extract_route_stations(payload):
+    if isinstance(payload, dict):
+        for key in ["route", "routes", "stations", "station_list", "trainRoute", "stops"]:
+            route = payload.get(key)
+            if isinstance(route, list) and route:
+                dict_stops = [item for item in route if isinstance(item, dict)]
+                if dict_stops:
+                    stations = []
+                    for index, stop in enumerate(dict_stops):
+                        station_name = _find_nested_value(
+                            stop,
+                            ["stationName", "station_name", "name", "stnName", "stopName"],
+                        )
+                        station_code = _find_nested_value(
+                            stop,
+                            ["stationCode", "station_code", "code", "stnCode"],
+                        )
+                        arrival = _find_nested_value(
+                            stop,
+                            ["arrivalTime", "arrival", "arrTime", "sta"],
+                        )
+                        departure = _find_nested_value(
+                            stop,
+                            ["departureTime", "departure", "depTime", "std"],
+                        )
+                        platform = _find_nested_value(
+                            stop,
+                            ["platform", "platformNo", "pf", "pfNumber"],
+                        )
+                        distance = _find_nested_value(
+                            stop,
+                            ["distance", "distanceKm", "distance_km", "km"],
+                        )
+                        if station_name or station_code:
+                            stations.append({
+                                "index": index,
+                                "name": station_name or station_code or f"Stop {index + 1}",
+                                "code": station_code,
+                                "arrival": arrival,
+                                "departure": departure,
+                                "platform": str(platform) if platform not in (None, "") else None,
+                                "distance_km": str(distance) if distance not in (None, "") else None,
+                            })
+                    if stations:
+                        return stations
+        for value in payload.values():
+            route_stations = _extract_route_stations(value)
+            if route_stations:
+                return route_stations
+    elif isinstance(payload, list):
+        for item in payload:
+            route_stations = _extract_route_stations(item)
+            if route_stations:
+                return route_stations
+    return None
+
+
 def _parse_duration_minutes(value: str | None) -> int | None:
     if not value:
         return None
@@ -363,6 +420,7 @@ def _store_train_cache(parsed: TrainInfoResponse, source: str):
         "speed": parsed.speed,
         "cancelled": parsed.cancelled,
         "route_changed": parsed.route_changed,
+        "route_stations": parsed.route_stations,
         "api_message": parsed.api_message,
         "fetched_at": now_iso,
         "last_journey_date": journey_date,
@@ -471,6 +529,7 @@ def _parse_train_info(train_number: str, journey_date: str, payload: dict, endpo
     data = payload.get("data", payload) or {}
     normalized = _normalize_payload(data)
     route_summary = _extract_route_summary(data) or {}
+    route_stations = _extract_route_stations(data)
     run_date = _extract_run_date(data, journey_date)
 
     train_name = _find_nested_value(normalized, ["trainName", "name", "train_name", "trainFullName"])
@@ -554,6 +613,7 @@ def _parse_train_info(train_number: str, journey_date: str, payload: dict, endpo
         cancelled=cancelled,
         route_changed=route_changed,
         api_message=f"Fetched from {endpoint_name}",
+        route_stations=route_stations,
     )
 
 
@@ -612,6 +672,7 @@ async def _get_train_info_uncached(train_number: str, journey_date: str, refresh
                     speed=shared_cached.get("speed"),
                     cancelled=bool(shared_cached.get("cancelled", False)),
                     route_changed=bool(shared_cached.get("route_changed", False)),
+                    route_stations=shared_cached.get("route_stations"),
                     api_message="Fetched from shared train database cache",
                 )
                 _store_train_cache(parsed, source="shared_train_cache")

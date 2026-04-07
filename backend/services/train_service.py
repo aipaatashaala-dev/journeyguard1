@@ -219,6 +219,94 @@ def _extract_route_summary(payload):
     return None
 
 
+def _parse_duration_minutes(value: str | None) -> int | None:
+    if not value:
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    match = re.search(r"(?:(\d+)\s*[:hH]\s*(\d{1,2}))|(?:(\d+)\s*(?:hr|hrs|hour|hours))\s*(?:(\d{1,2})\s*(?:min|mins|minute|minutes))?)", raw)
+    if match:
+        if match.group(1) is not None:
+            hours = int(match.group(1))
+            minutes = int(match.group(2))
+        else:
+            hours = int(match.group(3) or 0)
+            minutes = int(match.group(4) or 0)
+        return hours * 60 + minutes
+
+    compact_match = re.fullmatch(r"(\d{1,2})[:.](\d{2})", raw)
+    if compact_match:
+        return int(compact_match.group(1)) * 60 + int(compact_match.group(2))
+
+    return None
+
+
+def _parse_clock_value(value: str | None) -> tuple[int, int, int] | None:
+    if not value:
+        return None
+
+    raw = str(value).strip().upper()
+    if not raw:
+        return None
+
+    day_offset = 0
+    offset_match = re.search(r"\+(\d+)", raw)
+    if offset_match:
+        day_offset = int(offset_match.group(1))
+        raw = re.sub(r"\s*\+\d+\s*", " ", raw).strip()
+
+    match = re.search(r"(\d{1,2}):(\d{2})", raw)
+    if not match:
+        return None
+
+    hour = int(match.group(1))
+    minute = int(match.group(2))
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute, day_offset
+
+
+def _format_clock_value(total_minutes: int) -> str:
+    safe_total = max(0, int(total_minutes))
+    day_offset, minutes_in_day = divmod(safe_total, 24 * 60)
+    hour, minute = divmod(minutes_in_day, 60)
+    suffix = f" +{day_offset}" if day_offset > 0 else ""
+    return f"{hour:02d}:{minute:02d}{suffix}"
+
+
+def _normalize_schedule_times(
+    departure: str | None,
+    arrival: str | None,
+    duration_value: str | None,
+) -> tuple[str | None, str | None]:
+    dep_parts = _parse_clock_value(departure)
+    arr_parts = _parse_clock_value(arrival)
+    duration_minutes = _parse_duration_minutes(duration_value)
+
+    if dep_parts and duration_minutes is not None:
+        departure_total = dep_parts[0] * 60 + dep_parts[1]
+        computed_arrival_total = departure_total + duration_minutes
+        computed_arrival = _format_clock_value(computed_arrival_total)
+
+        if not arr_parts:
+            return departure, computed_arrival
+
+        actual_arrival_total = arr_parts[0] * 60 + arr_parts[1] + arr_parts[2] * 24 * 60
+        if abs(actual_arrival_total - computed_arrival_total) > 90:
+            return departure, computed_arrival
+
+    if dep_parts and arr_parts and arr_parts[2] == 0:
+        departure_total = dep_parts[0] * 60 + dep_parts[1]
+        actual_arrival_total = arr_parts[0] * 60 + arr_parts[1]
+        if actual_arrival_total <= departure_total:
+            return departure, _format_clock_value(actual_arrival_total + 24 * 60)
+
+    return departure, arrival
+
+
 def _lookup_cached_train_details(train_number: str):
     try:
         pnr_data = fb_db.reference("pnr_data").get() or {}
@@ -402,6 +490,11 @@ def _parse_train_info(train_number: str, journey_date: str, payload: dict, endpo
         normalized,
         ["arrivalTime", "toStd", "arrival", "destinationArrivalTime", "arrTime", "sta"],
     ) or route_summary.get("arrival")
+    duration_value = _find_nested_value(
+        normalized,
+        ["duration", "journeyTime", "travelTime", "runningTime", "timeTaken"],
+    )
+    departure, arrival = _normalize_schedule_times(departure, arrival, duration_value)
     current_status = _first_value(
         normalized,
         ["currentStatus", "status", "statusMessage", "runningStatus", "trainStatus"],

@@ -41,15 +41,24 @@ export default function DashboardPage() {
   const [showManualModal, setShowManualModal] = useState(false);
   const [showGeneralModal, setShowGeneralModal] = useState(false);
   const [pnrDetails, setPnrDetails] = useState(null);
+  const [pnrLookupError, setPnrLookupError] = useState('');
   const [pnrFetching, setPnrFetching] = useState(false);
   const [selectedBerth, setSelectedBerth] = useState('');
-  const [pnrJourneyDate, setPnrJourneyDate] = useState(formatDate(new Date()));
+  const [pnrFallback, setPnrFallback] = useState({
+    trainNumber: '',
+    journeyDate: formatDate(new Date()),
+    coach: '',
+    seat: '',
+    berthStatus: 'CONFIRMED',
+  });
   const [manualTrainDetails, setManualTrainDetails] = useState(null);
   const [generalTrainDetails, setGeneralTrainDetails] = useState(null);
   const [manualTrainFetching, setManualTrainFetching] = useState(false);
   const [generalTrainFetching, setGeneralTrainFetching] = useState(false);
   const [manualTrainConfirmed, setManualTrainConfirmed] = useState(false);
   const [generalTrainConfirmed, setGeneralTrainConfirmed] = useState(false);
+  const [manualSelectedRunDate, setManualSelectedRunDate] = useState('');
+  const [generalSelectedRunDate, setGeneralSelectedRunDate] = useState('');
 
   const clearStoredJourney = () => {
     localStorage.removeItem('jg_journey');
@@ -137,11 +146,13 @@ export default function DashboardPage() {
   useEffect(() => {
     setManualTrainDetails(null);
     setManualTrainConfirmed(false);
+    setManualSelectedRunDate('');
   }, [manual.trainNumber, manual.journeyDate]);
 
   useEffect(() => {
     setGeneralTrainDetails(null);
     setGeneralTrainConfirmed(false);
+    setGeneralSelectedRunDate('');
   }, [general.trainNumber, general.journeyDate]);
 
   const getGroupPath = (journey, coachId) => {
@@ -153,6 +164,7 @@ export default function DashboardPage() {
   const joinBackgroundGroup = async ({
     trainNumber,
     journeyDate,
+    runDate = null,
     coach = 'general',
     berth = '',
     arrivalTime = null,
@@ -174,6 +186,7 @@ export default function DashboardPage() {
       body: JSON.stringify({
         train_number: trainNumber,
         journey_date: journeyDate,
+        run_date: runDate || journeyDate,
         coach,
         berth,
         arrival_time: arrivalTime,
@@ -235,6 +248,12 @@ export default function DashboardPage() {
       }
 
       setDetailsState(data);
+      if (mode === 'manual') {
+        setManualSelectedRunDate(data.requires_run_date_selection ? '' : (data.run_date || journeyDate));
+      }
+      if (mode === 'general') {
+        setGeneralSelectedRunDate(data.requires_run_date_selection ? '' : (data.run_date || journeyDate));
+      }
       if (mode === 'manual') setManualTrainConfirmed(false);
       if (mode === 'general') setGeneralTrainConfirmed(false);
       toast.success('Train details loaded');
@@ -261,14 +280,19 @@ export default function DashboardPage() {
       toast.error('Confirm the fetched train details before joining');
       return;
     }
+    if (manualTrainDetails?.requires_run_date_selection && !manualSelectedRunDate) {
+      toast.error('Choose whether you want yesterday or today train run');
+      return;
+    }
 
     setLoading(true);
     try {
+      const resolvedRunDate = manualSelectedRunDate || manualTrainDetails?.run_date || journeyDate;
       const journey = {
         trainNumber,
         trainName: manualTrainDetails?.train_name || '',
         displayName: '',
-        journeyDate,
+        journeyDate: resolvedRunDate,
         coach,
         seat,
         berthStatus,
@@ -277,12 +301,14 @@ export default function DashboardPage() {
       const joinData = await joinBackgroundGroup({
         trainNumber,
         journeyDate,
+        runDate: resolvedRunDate,
         coach,
         berth: seat,
         arrivalTime: manualTrainDetails?.arrival || null,
         berthStatus,
         joinMode: 'manual',
       });
+      journey.journeyDate = joinData?.journey_date || journey.journeyDate;
       journey.displayName = joinData?.display_name || '';
       toast.success('Joined your train group.');
       setManualTrainDetails(null);
@@ -321,14 +347,19 @@ export default function DashboardPage() {
       toast.error('Confirm the fetched train details before joining');
       return;
     }
+    if (generalTrainDetails?.requires_run_date_selection && !generalSelectedRunDate) {
+      toast.error('Choose whether you want yesterday or today train run');
+      return;
+    }
 
     setLoading(true);
     try {
+      const resolvedRunDate = generalSelectedRunDate || generalTrainDetails?.run_date || journeyDate;
       const journey = {
         trainNumber,
         trainName: generalTrainDetails?.train_name || '',
         displayName: '',
-        journeyDate,
+        journeyDate: resolvedRunDate,
         coach: 'general',
         berth: '',
         seat: '',
@@ -338,10 +369,12 @@ export default function DashboardPage() {
       const joinData = await joinBackgroundGroup({
         trainNumber,
         journeyDate,
+        runDate: resolvedRunDate,
         coach: 'general',
         arrivalTime: generalTrainDetails?.arrival || null,
         joinMode: 'general',
       });
+      journey.journeyDate = joinData?.journey_date || journey.journeyDate;
       journey.displayName = joinData?.display_name || '';
       toast.success('Joined the train group.');
       setGeneralTrainDetails(null);
@@ -365,6 +398,7 @@ export default function DashboardPage() {
     }
 
     setPnrFetching(true);
+    setPnrLookupError('');
     try {
       const token = await user.getIdToken();
       const res = await fetch(`${API_BASE_URL}/pnr/${pnr}`, {
@@ -373,25 +407,89 @@ export default function DashboardPage() {
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        toast.error(err.detail || 'Invalid PNR');
+        const detail = typeof err.detail === 'string' ? err.detail : 'Could not fetch PNR details';
+        setPnrLookupError(detail);
+        toast.error(detail);
         setPnrFetching(false);
         return;
       }
 
       const data = await res.json();
       setPnrDetails(data);
+      setPnrLookupError('');
       setSelectedBerth('');
-      const pnrDate = data.journey_date ? new Date(data.journey_date.split('-').reverse().join('-')) : new Date();
-      setPnrJourneyDate(formatDate(pnrDate));
+      setPnrFallback((prev) => ({
+        ...prev,
+        trainNumber: data.train_number || prev.trainNumber,
+        journeyDate: data.run_date || data.journey_date || prev.journeyDate,
+        coach: data.coach || prev.coach,
+        seat: data.berth || prev.seat,
+      }));
+      if (data.cancelled || String(data.current_status || '').toLowerCase().includes('cancel')) {
+        toast.error(data.current_status || 'This train is cancelled. Joining is disabled.');
+      }
     } catch (err) {
+      setPnrLookupError('Failed to fetch PNR details');
       toast.error('Failed to fetch PNR details');
     } finally {
       setPnrFetching(false);
     }
   };
 
+  const handlePnrFallbackJoin = async (e) => {
+    e.preventDefault();
+    if (!pnrFallback.trainNumber || !pnrFallback.journeyDate || !pnrFallback.coach || !pnrFallback.seat) {
+      toast.error('Enter train number, train start date, coach, and berth');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const journey = {
+        trainNumber: pnrFallback.trainNumber,
+        trainName: '',
+        displayName: '',
+        journeyDate: pnrFallback.journeyDate,
+        coach: pnrFallback.coach,
+        seat: pnrFallback.seat,
+        berthStatus: pnrFallback.berthStatus,
+        joinMode: 'pnr_fallback',
+      };
+
+      const joinData = await joinBackgroundGroup({
+        trainNumber: journey.trainNumber,
+        journeyDate: journey.journeyDate,
+        runDate: journey.journeyDate,
+        coach: journey.coach,
+        berth: journey.seat,
+        berthStatus: journey.berthStatus,
+        joinMode: 'pnr_fallback',
+      });
+
+      journey.journeyDate = joinData?.journey_date || journey.journeyDate;
+      journey.displayName = joinData?.display_name || '';
+
+      toast.success('Joined the train group using manual PNR fallback.');
+      setPnr('');
+      setPnrDetails(null);
+      setPnrLookupError('');
+      setShowPnrModal(false);
+      await handleJoinSuccess(journey, joinData?.coach_id);
+    } catch (err) {
+      if (err.message !== 'validation' && err.message !== 'join_failed') {
+        toast.error(err.message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handlePnrJoin = async (e) => {
     e.preventDefault();
+    if (pnrDetails?.cancelled || String(pnrDetails?.current_status || '').toLowerCase().includes('cancel')) {
+      toast.error(pnrDetails?.current_status || 'This train is cancelled. Joining is not allowed.');
+      return;
+    }
     if (!selectedBerth) {
       toast.error('Please select a berth');
       return;
@@ -403,7 +501,7 @@ export default function DashboardPage() {
         trainNumber: pnrDetails.train_number,
         trainName: pnrDetails.train_name || '',
         displayName: '',
-        journeyDate: pnrJourneyDate,
+        journeyDate: pnrDetails.run_date || pnrDetails.journey_date,
         coach: pnrDetails.coach || 'general',
         seat: selectedBerth,
         berthStatus: '',
@@ -412,12 +510,14 @@ export default function DashboardPage() {
 
       const joinData = await joinBackgroundGroup({
         trainNumber: journey.trainNumber,
-        journeyDate: journey.journeyDate,
+        journeyDate: pnrDetails.journey_date || journey.journeyDate,
+        runDate: pnrDetails.run_date || journey.journeyDate,
         coach: journey.coach,
         berth: journey.seat,
         arrivalTime: pnrDetails?.arrival || null,
         joinMode: 'pnr',
       });
+      journey.journeyDate = joinData?.journey_date || journey.journeyDate;
       journey.displayName = joinData?.display_name || '';
 
       toast.success('PNR matched and train group joined.');
@@ -438,6 +538,7 @@ export default function DashboardPage() {
     setShowPnrModal(false);
     setPnr('');
     setPnrDetails(null);
+    setPnrLookupError('');
     setSelectedBerth('');
   };
 
@@ -499,23 +600,23 @@ export default function DashboardPage() {
               </p>
             </div>
 
-            <div className="ticket-card" style={{ padding: '1.2rem 1.3rem', minWidth: 0, width: '100%', maxWidth: 360, alignSelf: 'flex-start' }}>
+            <div className="ticket-card" style={{ padding: '1.2rem 1.4rem', minWidth: 0, width: '100%', maxWidth: 430, alignSelf: 'flex-start' }}>
               <div style={{ fontSize: '0.74rem', textTransform: 'uppercase', letterSpacing: '0.12em', color: '#6a7c99' }}>
                 Traveler Snapshot
               </div>
-              <h3 style={{ fontSize: '1.35rem', margin: '0.45rem 0 0.9rem' }}>{user?.email}</h3>
+              <h3 style={{ fontSize: 'clamp(1.1rem, 2.6vw, 1.35rem)', margin: '0.45rem 0 0.9rem', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{user?.email}</h3>
               <div style={{ display: 'grid', gap: '0.7rem' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.9rem', alignItems: 'flex-start' }}>
                   <span>Today</span>
-                  <strong>{new Date().toLocaleDateString()}</strong>
+                  <strong style={{ textAlign: 'right' }}>{new Date().toLocaleDateString()}</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.9rem', alignItems: 'flex-start' }}>
                   <span>Journey loaded</span>
-                  <strong>{currentJourney ? 'Yes' : 'No'}</strong>
+                  <strong style={{ textAlign: 'right' }}>{currentJourney ? 'Yes' : 'No'}</strong>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.9rem', alignItems: 'flex-start' }}>
                   <span>Quick access</span>
-                  <strong>Group, settings, support</strong>
+                  <strong style={{ textAlign: 'right', maxWidth: 220, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>Group, settings, support</strong>
                 </div>
               </div>
             </div>
@@ -641,7 +742,10 @@ export default function DashboardPage() {
         <JourneyModal title="Manual Coach Entry" subtitle="Fill in the train, coach, berth, and whether it is Confirmed or RAC." onClose={closeManualModal}>
           <form onSubmit={handleManualModalSubmit} style={{ display: 'grid', gap: '1rem' }}>
             <input className="input" value={manual.trainNumber} onChange={(e) => setManual({ ...manual, trainNumber: e.target.value.toUpperCase() })} placeholder="Train number" required />
-            <input className="input" type="date" value={manual.journeyDate} onChange={(e) => setManual({ ...manual, journeyDate: e.target.value })} required />
+            <RelativeDatePicker
+              value={manual.journeyDate}
+              onChange={(value) => setManual({ ...manual, journeyDate: value })}
+            />
             <button
               type="button"
               className="btn btn-secondary"
@@ -655,10 +759,13 @@ export default function DashboardPage() {
               <TrainDetailsCard
                 details={manualTrainDetails}
                 confirmed={manualTrainConfirmed}
+                selectedRunDate={manualSelectedRunDate}
+                onSelectRunDate={setManualSelectedRunDate}
                 onConfirm={() => setManualTrainConfirmed(true)}
                 onCancel={() => {
                   setManualTrainDetails(null);
                   setManualTrainConfirmed(false);
+                  setManualSelectedRunDate('');
                 }}
               />
             )}
@@ -699,7 +806,10 @@ export default function DashboardPage() {
         <JourneyModal title="General Passenger Entry" subtitle="Join the same train-wide group without coach or berth details." onClose={closeGeneralModal}>
           <form onSubmit={handleGeneralModalSubmit} style={{ display: 'grid', gap: '1rem' }}>
             <input className="input" value={general.trainNumber} onChange={(e) => setGeneral({ ...general, trainNumber: e.target.value.toUpperCase() })} placeholder="Train number" required />
-            <input className="input" type="date" value={general.journeyDate} onChange={(e) => setGeneral({ ...general, journeyDate: e.target.value })} required />
+            <RelativeDatePicker
+              value={general.journeyDate}
+              onChange={(value) => setGeneral({ ...general, journeyDate: value })}
+            />
             <button
               type="button"
               className="btn btn-secondary"
@@ -713,10 +823,13 @@ export default function DashboardPage() {
               <TrainDetailsCard
                 details={generalTrainDetails}
                 confirmed={generalTrainConfirmed}
+                selectedRunDate={generalSelectedRunDate}
+                onSelectRunDate={setGeneralSelectedRunDate}
                 onConfirm={() => setGeneralTrainConfirmed(true)}
                 onCancel={() => {
                   setGeneralTrainDetails(null);
                   setGeneralTrainConfirmed(false);
+                  setGeneralSelectedRunDate('');
                 }}
               />
             )}
@@ -730,26 +843,106 @@ export default function DashboardPage() {
       {showPnrModal && (
         <JourneyModal title="Board With PNR" subtitle="Fetch your train and choose the berth that belongs to you." onClose={closePnrModal}>
           {!pnrDetails ? (
-            <form onSubmit={handlePnrSubmit} style={{ display: 'grid', gap: '1rem' }}>
-              <input
-                className="input"
-                value={pnr}
-                onChange={(e) => setPnr(e.target.value.replace(/\D/g, '').slice(0, 10))}
-                placeholder="10-digit PNR"
-                required
-              />
-              <button type="submit" className="btn btn-primary" disabled={pnrFetching || pnr.length !== 10} style={{ justifyContent: 'center' }}>
-                {pnrFetching ? <span className="spinner" /> : 'Fetch Details'}
-              </button>
-            </form>
+            <div style={{ display: 'grid', gap: '1rem' }}>
+              <form onSubmit={handlePnrSubmit} style={{ display: 'grid', gap: '1rem' }}>
+                <input
+                  className="input"
+                  value={pnr}
+                  onChange={(e) => setPnr(e.target.value.replace(/\D/g, '').slice(0, 10))}
+                  placeholder="10-digit PNR"
+                  required
+                />
+                <button type="submit" className="btn btn-primary" disabled={pnrFetching || pnr.length !== 10} style={{ justifyContent: 'center' }}>
+                  {pnrFetching ? <span className="spinner" /> : 'Fetch Details'}
+                </button>
+              </form>
+
+              {pnrLookupError && (
+                <form onSubmit={handlePnrFallbackJoin} className="glass-card" style={{ padding: '1rem', display: 'grid', gap: '0.9rem' }}>
+                  <div style={{ display: 'grid', gap: '0.35rem' }}>
+                    <div style={{ fontWeight: 700 }}>PNR details unavailable from API</div>
+                    <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
+                      {pnrLookupError}. You can still join the train group by entering the ticket details manually.
+                    </div>
+                  </div>
+                  <input
+                    className="input"
+                    value={pnrFallback.trainNumber}
+                    onChange={(e) => setPnrFallback((prev) => ({ ...prev, trainNumber: e.target.value.toUpperCase() }))}
+                    placeholder="Train number"
+                    required
+                  />
+                  <RelativeDatePicker
+                    value={pnrFallback.journeyDate}
+                    onChange={(value) => setPnrFallback((prev) => ({ ...prev, journeyDate: value }))}
+                  />
+                  <div className="manual-seat-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                    <input
+                      className="input"
+                      value={pnrFallback.coach}
+                      onChange={(e) => setPnrFallback((prev) => ({ ...prev, coach: e.target.value.toUpperCase() }))}
+                      placeholder="Coach"
+                      required
+                    />
+                    <input
+                      className="input"
+                      value={pnrFallback.seat}
+                      onChange={(e) => setPnrFallback((prev) => ({ ...prev, seat: e.target.value.toUpperCase() }))}
+                      placeholder="Berth / Seat"
+                      required
+                    />
+                  </div>
+                  <div className="glass-card" style={{ padding: '0.95rem' }}>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text2)', marginBottom: '0.65rem' }}>Seat status</div>
+                    <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+                      {[
+                        ['CONFIRMED', 'Confirmed berth'],
+                        ['RAC', 'RAC'],
+                      ].map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={`action-chip ${pnrFallback.berthStatus === value ? 'active' : ''}`}
+                          onClick={() => setPnrFallback((prev) => ({ ...prev, berthStatus: value }))}
+                          style={{
+                            background: pnrFallback.berthStatus === value ? 'rgba(32,50,79,0.12)' : undefined,
+                            color: pnrFallback.berthStatus === value ? '#20324f' : undefined,
+                          }}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <button type="submit" className="btn btn-secondary" disabled={loading} style={{ justifyContent: 'center' }}>
+                    {loading ? <span className="spinner" /> : 'Join With Manual Ticket Details'}
+                  </button>
+                </form>
+              )}
+            </div>
           ) : (
             <form onSubmit={handlePnrJoin} style={{ display: 'grid', gap: '1rem' }}>
               <div className="glass-card" style={{ padding: '1rem' }}>
                 <div className="dashboard-grid">
-                  <div><strong>Train</strong><div>{pnrDetails.train_number}</div></div>
+                  <div><strong>Train</strong><div>{pnrDetails.train_number} {pnrDetails.train_name ? `- ${pnrDetails.train_name}` : ''}</div></div>
                   <div><strong>Coach</strong><div>{pnrDetails.coach || 'General'}</div></div>
                   <div><strong>From</strong><div>{pnrDetails.from_station}</div></div>
                   <div><strong>To</strong><div>{pnrDetails.to_station}</div></div>
+                  <div><strong>Journey date</strong><div>{describeRunDate(pnrDetails.journey_date || '')}</div></div>
+                  <div><strong>Run date</strong><div>{describeRunDate(pnrDetails.run_date || pnrDetails.journey_date || '')}</div></div>
+                </div>
+                <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', marginTop: '0.85rem' }}>
+                  <span
+                    className="action-chip"
+                    style={{
+                      cursor: 'default',
+                      color: pnrDetails.cancelled ? 'var(--danger)' : 'var(--success)',
+                      background: pnrDetails.cancelled ? 'rgba(223,79,104,0.12)' : 'rgba(31,157,114,0.12)',
+                      borderColor: 'transparent',
+                    }}
+                  >
+                    Status: {pnrDetails.current_status || (pnrDetails.cancelled ? 'Cancelled' : 'Confirmed')}
+                  </span>
                 </div>
               </div>
 
@@ -777,11 +970,14 @@ export default function DashboardPage() {
                   ))}
                 </div>
               </div>
+              {pnrDetails.cancelled && (
+                <div className="glass-card" style={{ padding: '0.95rem', color: 'var(--danger)', background: 'rgba(223,79,104,0.08)' }}>
+                  This train is currently cancelled, so joining this train group is disabled.
+                </div>
+              )}
 
-              <input className="input" type="date" value={pnrJourneyDate} onChange={(e) => setPnrJourneyDate(e.target.value)} required />
-
-              <button type="submit" className="btn btn-primary" disabled={loading || !selectedBerth} style={{ justifyContent: 'center' }}>
-                {loading ? <span className="spinner" /> : 'Join From PNR'}
+              <button type="submit" className="btn btn-primary" disabled={loading || !selectedBerth || pnrDetails.cancelled} style={{ justifyContent: 'center' }}>
+                {loading ? <span className="spinner" /> : (pnrDetails.cancelled ? 'Join Disabled For Cancelled Train' : 'Join From PNR')}
               </button>
             </form>
           )}
@@ -843,7 +1039,115 @@ function JourneyModal({ title, subtitle, children, onClose }) {
   );
 }
 
-function TrainDetailsCard({ details, confirmed, onConfirm, onCancel }) {
+function RelativeDatePicker({ value, onChange }) {
+  const today = formatDate(new Date());
+  const yesterdayDate = new Date();
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = formatDate(yesterdayDate);
+  const dayBeforeYesterdayDate = new Date();
+  dayBeforeYesterdayDate.setDate(dayBeforeYesterdayDate.getDate() - 2);
+  const dayBeforeYesterday = formatDate(dayBeforeYesterdayDate);
+  const [showChoices, setShowChoices] = useState(false);
+
+  const dateOptions = [
+    ['Today', today],
+    ['Yesterday', yesterday],
+    ['Day before yesterday', dayBeforeYesterday],
+  ];
+
+  const selectedOption = dateOptions.find(([, dateValue]) => dateValue === value);
+  const selectedLabel = selectedOption?.[0] || value;
+  const selectedDisplay = selectedOption ? `${selectedOption[0]} (${selectedOption[1]})` : value;
+
+  return (
+    <div className="glass-card" style={{ padding: '0.95rem', display: 'grid', gap: '0.7rem' }}>
+      <div style={{ fontSize: '0.82rem', color: 'var(--text2)' }}>Train start date</div>
+      <button
+        type="button"
+        className="action-chip"
+        onClick={() => setShowChoices((open) => !open)}
+        style={{ justifyContent: 'space-between', width: 'fit-content', minWidth: 220 }}
+      >
+        <span>{selectedLabel || 'Choose train start date'}</span>
+        <CalendarDays size={16} />
+      </button>
+      {showChoices && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(6,10,18,0.28)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+            zIndex: 1100,
+          }}
+          onClick={() => setShowChoices(false)}
+        >
+          <div
+            className="glass-card"
+            style={{
+              width: 'min(420px, 100%)',
+              padding: '0.9rem',
+              display: 'grid',
+              gap: '0.55rem',
+              background: 'rgba(255,255,255,0.98)',
+              border: '1px solid rgba(32,50,79,0.1)',
+              boxShadow: '0 16px 40px rgba(18, 27, 45, 0.16)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ fontWeight: 700, fontSize: '0.98rem' }}>Choose train start date</div>
+            {dateOptions.map(([label, dateValue]) => (
+              <button
+                key={dateValue}
+                type="button"
+                onClick={() => {
+                  onChange(dateValue);
+                  setShowChoices(false);
+                }}
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  width: '100%',
+                  padding: '0.8rem 0.9rem',
+                  borderRadius: 14,
+                  border: '1px solid rgba(32,50,79,0.08)',
+                  background: value === dateValue ? 'rgba(32,50,79,0.08)' : 'rgba(255,255,255,0.92)',
+                  color: 'var(--text)',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>{label}</span>
+                <span style={{ color: 'var(--text2)', fontSize: '0.92rem' }}>{dateValue}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      <div style={{ color: 'var(--text2)', fontSize: '0.9rem' }}>
+        Selected train start date: <strong style={{ color: 'var(--text)' }}>{selectedDisplay}</strong>
+      </div>
+    </div>
+  );
+}
+
+function TrainDetailsCard({ details, confirmed, selectedRunDate, onSelectRunDate, onConfirm, onCancel }) {
+  const statusTone = details.cancelled
+    ? { color: 'var(--danger)', bg: 'rgba(223,79,104,0.12)' }
+    : details.route_changed
+      ? { color: 'var(--rail-gold)', bg: 'rgba(247,198,106,0.16)' }
+      : { color: 'var(--success)', bg: 'rgba(31,157,114,0.12)' };
+  const routeView = buildRouteView(details);
+  const canConfirm = !details.requires_run_date_selection || Boolean(selectedRunDate);
+  const runDateDisplay = details.requires_run_date_selection
+    ? (selectedRunDate ? renderRunChoiceLabel(selectedRunDate, 0) : 'Choose Yesterday or Today')
+    : describeRunDate(details.run_date || details.journey_date || '');
+
   return (
     <div className="glass-card" style={{ padding: '1rem', display: 'grid', gap: '0.9rem' }}>
       <div>
@@ -852,14 +1156,120 @@ function TrainDetailsCard({ details, confirmed, onConfirm, onCancel }) {
           {details.train_number} {details.train_name ? `- ${details.train_name}` : ''}
         </div>
       </div>
+      <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap' }}>
+        <span
+          className="action-chip"
+          style={{ cursor: 'default', color: statusTone.color, background: statusTone.bg, borderColor: 'transparent' }}
+        >
+          Status: {details.current_status || 'Scheduled'}
+        </span>
+        {details.current_station && (
+          <span className="action-chip" style={{ cursor: 'default' }}>
+            Current: {details.current_station}
+          </span>
+        )}
+        {details.next_station_name && (
+          <span className="action-chip" style={{ cursor: 'default' }}>
+            Next: {details.next_station_name}
+          </span>
+        )}
+      </div>
       <div className="dashboard-grid">
         <div><strong>Start</strong><div>{details.from_station || '-'}</div></div>
         <div><strong>End</strong><div>{details.to_station || '-'}</div></div>
         <div><strong>Departure</strong><div>{details.departure || '-'}</div></div>
         <div><strong>Arrival</strong><div>{details.arrival || '-'}</div></div>
+        <div><strong>Expected arrival</strong><div>{details.expected_arrival || details.arrival || '-'}</div></div>
+        <div><strong>Run date</strong><div>{runDateDisplay || '-'}</div></div>
       </div>
+      {details.api_message && (
+        <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
+          {details.api_message}
+        </div>
+      )}
+      {details.requires_run_date_selection && Array.isArray(details.run_date_options) && details.run_date_options.length > 1 && (
+        <div className="glass-card" style={{ padding: '0.95rem', display: 'grid', gap: '0.7rem', background: 'rgba(247,198,106,0.1)' }}>
+          <div style={{ fontWeight: 700 }}>Two train runs may exist for this train number.</div>
+          <div style={{ color: 'var(--text2)', lineHeight: 1.7 }}>
+            Choose the running train you want to join. We will use the matching backend run date to create or join the correct train group.
+          </div>
+          <div style={{ color: 'var(--text2)', lineHeight: 1.7, fontSize: '0.92rem' }}>
+            Yesterday means the train that started on the previous day and may still be running now. Today means the new train run that started today.
+          </div>
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            {details.run_date_options.slice(0, 2).map((dateValue, index) => (
+              <button
+                key={dateValue}
+                type="button"
+                className="action-chip"
+                onClick={() => onSelectRunDate?.(dateValue)}
+                style={{
+                  background: selectedRunDate === dateValue ? 'rgba(32,50,79,0.12)' : undefined,
+                  color: selectedRunDate === dateValue ? '#20324f' : undefined,
+                }}
+              >
+                {renderRunChoiceLabel(dateValue, index)}
+              </button>
+            ))}
+          </div>
+          {selectedRunDate && (
+            <div style={{ color: 'var(--text2)', lineHeight: 1.7, fontSize: '0.9rem' }}>
+              Selected train run: <strong style={{ color: 'var(--text)' }}>{renderRunChoiceLabel(selectedRunDate, 0)}</strong>
+            </div>
+          )}
+        </div>
+      )}
+      {routeView && (
+        <div className="glass-card" style={{ padding: '0.95rem', display: 'grid', gap: '0.8rem', background: 'rgba(8,13,26,0.03)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 4 }}>Start station</div>
+              <div style={{ fontWeight: 700 }}>{routeView.start.name}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 4 }}>End station</div>
+              <div style={{ fontWeight: 700 }}>{routeView.end.name}</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gap: '0.65rem' }}>
+            {routeView.crossed.length > 0 && (
+              <div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 6 }}>Crossed stations</div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {routeView.crossed.map((station) => (
+                    <span key={`crossed-${station.index}`} className="action-chip" style={{ cursor: 'default', background: 'rgba(31,157,114,0.1)', color: 'var(--success)', borderColor: 'transparent' }}>
+                      {station.code || station.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div>
+              <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 6 }}>Current position</div>
+              <div className="action-chip" style={{ cursor: 'default', width: 'fit-content', background: 'rgba(59,139,255,0.12)', color: 'var(--accent2)', borderColor: 'transparent' }}>
+                {routeView.currentLabel}
+              </div>
+            </div>
+
+            {routeView.upcoming.length > 0 && (
+              <div>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text3)', marginBottom: 6 }}>Upcoming stations</div>
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                  {routeView.upcoming.map((station) => (
+                    <span key={`upcoming-${station.index}`} className="action-chip" style={{ cursor: 'default', background: 'rgba(247,198,106,0.16)', color: '#8a5a00', borderColor: 'transparent' }}>
+                      {station.code || station.name}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <button type="button" className="btn btn-primary" onClick={onConfirm}>
+        <button type="button" className="btn btn-primary" onClick={onConfirm} disabled={!canConfirm}>
           {confirmed ? 'Details Confirmed' : 'Confirm Details'}
         </button>
         <button type="button" className="btn btn-secondary" onClick={onCancel}>
@@ -868,4 +1278,75 @@ function TrainDetailsCard({ details, confirmed, onConfirm, onCancel }) {
       </div>
     </div>
   );
+}
+
+function describeRunDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Unknown date';
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const parsed = new Date(`${raw}T00:00:00`);
+
+  const isSameDay = (left, right) =>
+    left.getFullYear() === right.getFullYear() &&
+    left.getMonth() === right.getMonth() &&
+    left.getDate() === right.getDate();
+
+  const relative = isSameDay(parsed, today)
+    ? 'Today'
+    : isSameDay(parsed, yesterday)
+      ? 'Yesterday'
+      : null;
+
+  return relative ? `${relative} (${raw})` : raw;
+}
+
+function renderRunChoiceLabel(value, index) {
+  const raw = String(value || '').trim();
+  const description = describeRunDate(raw);
+
+  if (description.startsWith('Yesterday')) {
+    return 'Yesterday';
+  }
+  if (description.startsWith('Today')) {
+    return 'Today';
+  }
+
+  return index === 0 ? 'Yesterday' : 'Today';
+}
+
+function buildRouteView(details) {
+  const stations = Array.isArray(details?.route_stations) ? details.route_stations.filter(Boolean) : [];
+  if (!stations.length) return null;
+
+  const normalize = (value) => String(value || '').trim().toUpperCase();
+  const currentName = normalize(details.current_station);
+  const nextName = normalize(details.next_station_name);
+
+  const findIndex = (target) => {
+    if (!target) return -1;
+    return stations.findIndex((station) => {
+      const name = normalize(station.name);
+      const code = normalize(station.code);
+      return name === target || code === target || name.includes(target) || target.includes(name) || code === target;
+    });
+  };
+
+  const currentIndex = findIndex(currentName);
+  const nextIndex = findIndex(nextName);
+  const pivotIndex = currentIndex >= 0 ? currentIndex : nextIndex >= 0 ? Math.max(0, nextIndex - 1) : 0;
+
+  return {
+    start: stations[0],
+    end: stations[stations.length - 1],
+    crossed: stations.slice(Math.max(0, pivotIndex - 3), pivotIndex),
+    upcoming: stations.slice(
+      currentIndex >= 0 ? currentIndex + 1 : nextIndex >= 0 ? nextIndex : 1,
+      currentIndex >= 0 ? currentIndex + 4 : nextIndex >= 0 ? nextIndex + 3 : 4
+    ),
+    currentLabel: details.current_station || details.next_station_name || stations[pivotIndex]?.name || 'Route loaded',
+  };
 }

@@ -267,6 +267,7 @@ def _format_pnr_response(pnr_data: dict) -> PNRDetailsResponse:
         train_number=pnr_data.get("train_number"),
         train_name=pnr_data.get("train_name"),
         journey_date=pnr_data.get("journey_date"),
+        run_date=pnr_data.get("journey_date"),
         coach=pnr_data.get("coach"),
         berth=pnr_data.get("berth"),
         from_station=pnr_data.get("from_station"),

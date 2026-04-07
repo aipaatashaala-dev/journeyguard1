@@ -65,16 +65,18 @@ class AsyncSingleFlight:
     """
 
     def __init__(self):
-        self._futures: dict[str, asyncio.Future] = {}
-        self._lock = asyncio.Lock()
+        self._futures_by_loop: dict[asyncio.AbstractEventLoop, dict[str, asyncio.Future]] = {}
+        self._state_lock = threading.Lock()
 
     async def run(self, key: str, factory: Callable[[], Awaitable[Any]]) -> Any:
+        loop = asyncio.get_running_loop()
         leader = False
-        async with self._lock:
-            future = self._futures.get(key)
+        with self._state_lock:
+            loop_futures = self._futures_by_loop.setdefault(loop, {})
+            future = loop_futures.get(key)
             if future is None:
-                future = asyncio.get_running_loop().create_future()
-                self._futures[key] = future
+                future = loop.create_future()
+                loop_futures[key] = future
                 leader = True
 
         if not leader:
@@ -88,8 +90,12 @@ class AsyncSingleFlight:
             future.set_exception(exc)
             raise
         finally:
-            async with self._lock:
-                self._futures.pop(key, None)
+            with self._state_lock:
+                loop_futures = self._futures_by_loop.get(loop)
+                if loop_futures is not None:
+                    loop_futures.pop(key, None)
+                    if not loop_futures:
+                        self._futures_by_loop.pop(loop, None)
 
 
 @dataclass

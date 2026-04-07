@@ -75,6 +75,7 @@ class UpdateUserProfileRequest(BaseModel):
 class JoinJourneyRequest(BaseModel):
     train_number: str
     journey_date: str          # YYYY-MM-DD
+    run_date: Optional[str] = None
     coach: str
     berth: str
     arrival_time: Optional[str] = None
@@ -108,6 +109,7 @@ class TrainInfoResponse(BaseModel):
     train_exists: bool
     train_number: str
     journey_date: str
+    run_date: Optional[str] = None
     train_name: Optional[str] = None
     from_station: Optional[str] = None
     to_station: Optional[str] = None
@@ -138,6 +140,7 @@ class PNRDetailsResponse(BaseModel):
     train_number: str
     train_name: str
     journey_date: str
+    run_date: Optional[str] = None
     coach: str
     from_station: str
     to_station: str

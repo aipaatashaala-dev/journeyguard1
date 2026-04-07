@@ -8,6 +8,7 @@ from firebase_admin import db as fb_db
 from dependencies import get_current_user
 from models.schemas import JoinJourneyRequest, TrainInfoResponse
 from services.email_service import send_journey_start_email, send_journey_end_email
+from services.http_pool import close_shared_http_clients
 from services.train_service import get_train_info
 from services.location_service import expire_location_session, get_location_data
 
@@ -492,6 +493,10 @@ def _announce_delay_milestones(group_id: str, metadata: dict, train_info: TrainI
 
 
 def _run_group_monitor(group_id: str, stop_event: threading.Event):
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     while not stop_event.is_set():
         try:
             metadata = fb_db.reference(f"train_groups/{group_id}/metadata").get() or {}
@@ -512,8 +517,7 @@ def _run_group_monitor(group_id: str, stop_event: threading.Event):
 
             train_info = None
             try:
-                import asyncio
-                train_info = asyncio.run(get_train_info(train_number, journey_date, refresh=True))
+                train_info = loop.run_until_complete(get_train_info(train_number, journey_date, refresh=True))
             except Exception:
                 train_info = None
 
@@ -547,6 +551,13 @@ def _run_group_monitor(group_id: str, stop_event: threading.Event):
         except Exception as exc:
             print(f"[GROUP_MONITOR] Error monitoring {group_id}: {exc}")
             stop_event.wait(180)
+
+    try:
+        loop.run_until_complete(close_shared_http_clients())
+    except Exception:
+        pass
+    finally:
+        loop.close()
 
     with _group_monitor_lock:
         _group_monitor_events.pop(group_id, None)
@@ -690,7 +701,9 @@ def _delete_group_and_chats(group_id: str):
 async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_current_user), background_tasks: BackgroundTasks = None):
     uid        = user["uid"]
     email      = _resolve_user_email(uid, user)
-    group_id   = _group_id(body.train_number, body.journey_date)
+    canonical_run_date = (body.run_date or body.journey_date or "").strip()
+    boarding_date = (body.journey_date or canonical_run_date).strip()
+    group_id   = _group_id(body.train_number, canonical_run_date)
     coach_id   = _coach_id(body.coach)
     join_mode = (body.join_mode or "").strip().lower() or None
     coach_value = (body.coach or "general").strip() or "general"
@@ -703,7 +716,7 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
     passenger_id = f"Passenger {passenger_coach_label}-{berth_value}" if berth_value else f"Passenger {passenger_coach_label}"
     display_name = _ensure_user_display_name(uid, email, user.get("name"))
     fallback_cleanup_at = _parse_group_cleanup_time(
-        body.journey_date,
+        canonical_run_date,
         body.arrival_time,
         grace_hours=_FALLBACK_GROUP_RETENTION_HOURS,
     )
@@ -774,7 +787,9 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         "passenger_id": passenger_id,
         "display_name": display_name,
         "train_number": body.train_number,
-        "journey_date": body.journey_date,
+        "journey_date": canonical_run_date,
+        "run_date"    : canonical_run_date,
+        "boarding_date": boarding_date,
         "coach"       : coach_value,
         "berth"       : berth_value,
         "berth_status": berth_status,
@@ -793,7 +808,9 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         metadata_ref.set({
             "created_at": join_time,
             "train_number": body.train_number,
-            "journey_date": body.journey_date,
+            "journey_date": canonical_run_date,
+            "run_date": canonical_run_date,
+            "boarding_date": boarding_date,
             "arrival_time": body.arrival_time,
             "scheduled_arrival": body.arrival_time,
             "cleanup_at": None,
@@ -803,7 +820,9 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
     else:
         metadata_ref.update({
             "train_number": body.train_number,
-            "journey_date": body.journey_date,
+            "journey_date": canonical_run_date,
+            "run_date": canonical_run_date,
+            "boarding_date": metadata.get("boarding_date") or boarding_date,
             "arrival_time": body.arrival_time or metadata.get("arrival_time"),
             "scheduled_arrival": metadata.get("scheduled_arrival") or body.arrival_time,
             "cleanup_at": metadata.get("cleanup_at"),
@@ -824,7 +843,7 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
                 passenger_id,
                 body.train_number,
                 coach_value,
-                body.journey_date,
+                canonical_run_date,
                 uid,
             )
         else:
@@ -833,7 +852,7 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
                 passenger_id,
                 body.train_number,
                 coach_value,
-                body.journey_date,
+                canonical_run_date,
                 uid,
             )
     else:
@@ -844,6 +863,9 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         "coach_id"    : coach_id,
         "passenger_id": passenger_id,
         "display_name": display_name,
+        "journey_date": canonical_run_date,
+        "run_date": canonical_run_date,
+        "boarding_date": boarding_date,
         "message"     : "Joined journey group",
     }
 

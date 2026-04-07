@@ -107,6 +107,23 @@ def _date_variants(journey_date: str) -> tuple[str, str]:
         return journey_date, journey_date.replace("-", "")
 
 
+def _normalize_iso_date(value: str | None) -> str | None:
+    if not value:
+        return None
+
+    raw = str(value).strip()
+    if not raw:
+        return None
+
+    for pattern in ("%Y-%m-%d", "%d-%m-%Y", "%Y%m%d", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, pattern).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+    return None
+
+
 def _first_value(payload: dict, keys: list[str], default=None):
     for key in keys:
         value = payload.get(key)
@@ -141,6 +158,26 @@ def _find_nested_value(payload, keys: list[str], default=None):
             if found not in (None, "", [], {}):
                 return found
     return default
+
+
+def _extract_run_date(payload, fallback_date: str) -> str:
+    raw_value = _find_nested_value(
+        payload,
+        [
+            "runDate",
+            "run_date",
+            "journeyDate",
+            "journey_date",
+            "dateOfJourney",
+            "doj",
+            "startDate",
+            "start_date",
+            "trainStartDate",
+            "sourceDate",
+        ],
+        default=None,
+    )
+    return _normalize_iso_date(raw_value) or _normalize_iso_date(fallback_date) or fallback_date
 
 
 def _extract_route_summary(payload):
@@ -225,6 +262,7 @@ def _store_train_cache(parsed: TrainInfoResponse, source: str):
     master_ref = fb_db.reference(f"train_master/{train_number}")
     master_payload = {
         "train_number": train_number,
+        "run_date": parsed.run_date,
         "train_name": parsed.train_name,
         "from_station": parsed.from_station,
         "to_station": parsed.to_station,
@@ -345,6 +383,7 @@ def _parse_train_info(train_number: str, journey_date: str, payload: dict, endpo
     data = payload.get("data", payload) or {}
     normalized = _normalize_payload(data)
     route_summary = _extract_route_summary(data) or {}
+    run_date = _extract_run_date(data, journey_date)
 
     train_name = _find_nested_value(normalized, ["trainName", "name", "train_name", "trainFullName"])
     from_station = _find_nested_value(
@@ -408,6 +447,7 @@ def _parse_train_info(train_number: str, journey_date: str, payload: dict, endpo
         train_exists=train_exists,
         train_number=train_number,
         journey_date=journey_date,
+        run_date=run_date,
         train_name=train_name,
         from_station=from_station,
         to_station=to_station,
@@ -466,6 +506,7 @@ async def _get_train_info_uncached(train_number: str, journey_date: str, refresh
                     train_exists=True,
                     train_number=train_number,
                     journey_date=journey_date,
+                    run_date=shared_cached.get("run_date") or journey_date,
                     train_name=shared_cached.get("train_name"),
                     from_station=shared_cached.get("from_station"),
                     to_station=shared_cached.get("to_station"),
@@ -527,6 +568,7 @@ async def _get_train_info_uncached(train_number: str, journey_date: str, refresh
             train_exists=True,
             train_number=train_number,
             journey_date=journey_date,
+            run_date=journey_date,
             train_name=cached_train.get("train_name"),
             from_station=cached_train.get("from_station"),
             to_station=cached_train.get("to_station"),
@@ -550,6 +592,7 @@ async def _get_train_info_uncached(train_number: str, journey_date: str, refresh
             train_exists=True,
             train_number=train_number,
             journey_date=journey_date,
+            run_date=journey_date,
             train_name=catalog_train.get("train_name"),
             from_station=catalog_train.get("from_station"),
             to_station=catalog_train.get("to_station"),
@@ -573,6 +616,7 @@ async def _get_train_info_uncached(train_number: str, journey_date: str, refresh
             train_exists=True,
             train_number=train_number,
             journey_date=journey_date,
+            run_date=journey_date,
             train_name=scraped_train.get("train_name"),
             from_station=scraped_train.get("from_station"),
             to_station=scraped_train.get("to_station"),

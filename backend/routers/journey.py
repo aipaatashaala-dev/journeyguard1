@@ -24,6 +24,23 @@ def _group_id(train: str, date: str) -> str:
     return f"{train}_{date}"
 
 
+async def _ensure_train_can_be_joined(train_number: str, journey_date: str, run_date: str):
+    try:
+        train_info = await get_train_info(train_number.strip(), run_date.strip() or journey_date.strip(), refresh=True)
+    except Exception:
+        return
+
+    status_text = str(train_info.current_status or "").strip()
+    if train_info.cancelled or "cancel" in status_text.lower():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "train_cancelled",
+                "message": status_text or "This train is cancelled. Joining this group is not allowed.",
+            },
+        )
+
+
 def _existing_group_dates_for_train(train_number: str, limit_days: int = 3) -> list[str]:
     try:
         groups = fb_db.reference("train_groups").get() or {}
@@ -759,6 +776,8 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         body.arrival_time,
         grace_hours=_FALLBACK_GROUP_RETENTION_HOURS,
     )
+
+    await _ensure_train_can_be_joined(body.train_number, boarding_date, canonical_run_date)
 
     existing = fb_db.reference(f"user_journeys/{uid}").get() or {}
     current_target_group = existing.get("group_id") if existing.get("group_id") == group_id else None

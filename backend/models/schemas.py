@@ -99,7 +99,7 @@ class JoinJourneyRequest(BaseModel):
         if v is None or str(v).strip() == "":
             return None
         value = str(v).strip().lower()
-        allowed = {"manual", "pnr", "general"}
+        allowed = {"manual", "pnr", "general", "pnr_fallback"}
         if value not in allowed:
             raise ValueError(f"join_mode must be one of {allowed}")
         return value
@@ -155,6 +155,8 @@ class PNRDetailsResponse(BaseModel):
     train_name: str
     journey_date: str
     run_date: Optional[str] = None
+    current_status: Optional[str] = None
+    cancelled: bool = False
     coach: str
     from_station: str
     to_station: str

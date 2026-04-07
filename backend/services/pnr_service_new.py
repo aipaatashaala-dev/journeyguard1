@@ -70,6 +70,50 @@ def _normalize_journey_date(journey_date: str) -> str:
         return fixed
 
 
+def _extract_pnr_current_status(payload: dict) -> str | None:
+    for key in [
+        "trainStatus",
+        "currentStatus",
+        "current_status",
+        "status",
+        "chartStatus",
+    ]:
+        value = payload.get(key)
+        if value not in (None, "", [], {}):
+            return str(value).strip()
+
+    passengers = payload.get("passengers") or payload.get("passengerStatus") or []
+    if passengers:
+        first_passenger = passengers[0] if isinstance(passengers[0], dict) else {}
+        for key in ["currentStatus", "current_status", "bookingStatus", "currentStatusDetails"]:
+            value = first_passenger.get(key)
+            if value not in (None, "", [], {}):
+                return str(value).strip()
+
+    return None
+
+
+def _extract_pnr_cancelled(payload: dict, current_status: str | None) -> bool:
+    status_text = str(current_status or "").strip().lower()
+    raw_value = (
+        payload.get("isCancelled")
+        or payload.get("cancelled")
+        or payload.get("trainCancelled")
+        or payload.get("cancelStatus")
+    )
+
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, (int, float)):
+        return bool(raw_value)
+    if isinstance(raw_value, str) and raw_value.strip():
+        normalized = raw_value.strip().lower()
+        if normalized in {"true", "yes", "1", "cancelled", "canceled"}:
+            return True
+
+    return "cancel" in status_text
+
+
 async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) -> PNRDetailsResponse:
     """
     Get PNR details and store in Firebase.
@@ -197,6 +241,8 @@ async def _fetch_from_irctc(pnr: str) -> dict:
 
             if success:
                 irctc_data = payload if isinstance(payload, dict) else {}
+                current_status = _extract_pnr_current_status(irctc_data)
+                cancelled = _extract_pnr_cancelled(irctc_data, current_status)
                 coach = "S1"
                 berth = None
                 all_berths = []
@@ -254,6 +300,8 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                     "train_number": irctc_data.get("trainNumber") or irctc_data.get("trainNo") or "TBD",
                     "train_name": irctc_data.get("trainName") or irctc_data.get("train_name") or "Unknown Train",
                     "journey_date": _normalize_journey_date(irctc_data.get("journeyDate") or irctc_data.get("doj") or "TBD"),
+                    "current_status": current_status,
+                    "cancelled": cancelled,
                     "coach": coach,
                     "berth": berth,
                     "from_station": irctc_data.get("source") or irctc_data.get("boardingPoint") or irctc_data.get("fromStation") or "TBD",
@@ -358,6 +406,8 @@ def _format_pnr_response(pnr_data: dict) -> PNRDetailsResponse:
         train_name=pnr_data.get("train_name"),
         journey_date=pnr_data.get("journey_date"),
         run_date=pnr_data.get("journey_date"),
+        current_status=pnr_data.get("current_status"),
+        cancelled=bool(pnr_data.get("cancelled", False)),
         coach=pnr_data.get("coach"),
         berth=pnr_data.get("berth"),
         from_station=pnr_data.get("from_station"),

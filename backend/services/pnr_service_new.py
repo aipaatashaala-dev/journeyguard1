@@ -14,7 +14,7 @@ from services.runtime_controls import AsyncSingleFlight, TTLCache
 
 # IRCTC RapidAPI Configuration
 IRCTC_API_KEY = os.getenv("IRCTC_API_KEY", "68ad334fc9msh44bddffcf14f1acp17032bjsn61766b1ac602")
-IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "irctc1.p.rapidapi.com")
+IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "irctc-indian-railway-pnr-status.p.rapidapi.com")
 IRCTC_API_BASE = os.getenv("IRCTC_API_BASE", f"https://{IRCTC_API_HOST}")
 _LOCAL_PNR_CACHE = TTLCache(max_size=1024)
 _PNR_SINGLE_FLIGHT = AsyncSingleFlight()
@@ -182,8 +182,7 @@ async def _fetch_from_irctc(pnr: str) -> dict:
 
         client = await get_shared_http_client()
         response = await client.get(
-            f"{IRCTC_API_BASE}/pnrStatus",
-            params={"pnr": pnr},
+            f"{IRCTC_API_BASE}/getPNRStatus/{pnr}",
             headers=headers
         )
 
@@ -191,29 +190,46 @@ async def _fetch_from_irctc(pnr: str) -> dict:
             data = response.json()
             print(f"[IRCTC] Successfully fetched PNR data: {data}")
 
-            if data.get("success"):
-                irctc_data = data.get("data", {})
+            payload = data.get("data") if isinstance(data.get("data"), dict) else data
+            success = data.get("success")
+            if success is None:
+                success = bool(payload)
+
+            if success:
+                irctc_data = payload if isinstance(payload, dict) else {}
                 coach = "S1"
                 berth = None
                 all_berths = []
 
-                if irctc_data.get("passengers"):
-                    for idx, passenger in enumerate(irctc_data["passengers"]):
-                        current_status = passenger.get("currentStatus", "")
+                passengers = irctc_data.get("passengers") or irctc_data.get("passengerStatus") or []
+
+                if passengers:
+                    for idx, passenger in enumerate(passengers):
+                        current_status = (
+                            passenger.get("currentStatus")
+                            or passenger.get("current_status")
+                            or passenger.get("bookingStatus")
+                            or passenger.get("currentStatusDetails")
+                            or ""
+                        )
                         status_parts = current_status.split()
 
                         berth_type = status_parts[0] if status_parts else "WL"
-                        coach_from_status = status_parts[1] if len(status_parts) > 1 else "S1"
-                        berth_num = status_parts[2] if len(status_parts) > 2 else f"WL{idx+1}"
+                        coach_from_status = (
+                            status_parts[1] if len(status_parts) > 1 else str(passenger.get("coach") or passenger.get("coachNo") or "S1")
+                        )
+                        berth_num = (
+                            status_parts[2] if len(status_parts) > 2 else str(passenger.get("berth") or passenger.get("berthNumber") or f"WL{idx+1}")
+                        )
 
                         if not berth_num or berth_num.startswith("WL"):
-                            berth_num = str(passenger.get("berth")) if passenger.get("berth") else f"WL{idx+1}"
+                            berth_num = str(passenger.get("berth") or passenger.get("berthNumber")) if (passenger.get("berth") or passenger.get("berthNumber")) else f"WL{idx+1}"
 
                         berth_data = {
                             "berth_number": str(berth_num),
                             "berth_type": berth_type,
-                            "passenger_name": passenger.get("name", f"Passenger {idx+1}"),
-                            "status": berth_type,
+                            "passenger_name": passenger.get("name") or passenger.get("passengerName") or f"Passenger {idx+1}",
+                            "status": berth_type or "CNF",
                             "claimed_by": None,
                             "claimed_at": None
                         }
@@ -221,23 +237,29 @@ async def _fetch_from_irctc(pnr: str) -> dict:
 
                         print(f"[IRCTC] Parsed passenger {idx+1}: berth={berth_num}, coach={coach_from_status}, status={berth_type}")
 
-                    first_passenger = irctc_data["passengers"][0]
-                    first_status = first_passenger.get("currentStatus", "")
+                    first_passenger = passengers[0]
+                    first_status = (
+                        first_passenger.get("currentStatus")
+                        or first_passenger.get("current_status")
+                        or first_passenger.get("bookingStatus")
+                        or first_passenger.get("currentStatusDetails")
+                        or ""
+                    )
                     first_parts = first_status.split()
-                    coach = first_parts[1] if len(first_parts) > 1 else first_passenger.get("coach", "S1")
-                    berth = first_parts[2] if len(first_parts) > 2 else str(first_passenger.get("berth")) if first_passenger.get("berth") else None
+                    coach = first_parts[1] if len(first_parts) > 1 else str(first_passenger.get("coach") or first_passenger.get("coachNo") or "S1")
+                    berth = first_parts[2] if len(first_parts) > 2 else str(first_passenger.get("berth") or first_passenger.get("berthNumber")) if (first_passenger.get("berth") or first_passenger.get("berthNumber")) else None
 
                 result = {
                     "pnr": pnr,
-                    "train_number": irctc_data.get("trainNumber", "TBD"),
-                    "train_name": irctc_data.get("trainName", "Unknown Train"),
-                    "journey_date": _normalize_journey_date(irctc_data.get("journeyDate", "TBD")),
+                    "train_number": irctc_data.get("trainNumber") or irctc_data.get("trainNo") or "TBD",
+                    "train_name": irctc_data.get("trainName") or irctc_data.get("train_name") or "Unknown Train",
+                    "journey_date": _normalize_journey_date(irctc_data.get("journeyDate") or irctc_data.get("doj") or "TBD"),
                     "coach": coach,
                     "berth": berth,
-                    "from_station": irctc_data.get("source", irctc_data.get("boardingPoint", "TBD")),
-                    "to_station": irctc_data.get("destination", "TBD"),
-                    "departure": irctc_data.get("departureTime", "TBD"),
-                    "arrival": irctc_data.get("arrivalTime", "TBD"),
+                    "from_station": irctc_data.get("source") or irctc_data.get("boardingPoint") or irctc_data.get("fromStation") or "TBD",
+                    "to_station": irctc_data.get("destination") or irctc_data.get("toStation") or "TBD",
+                    "departure": irctc_data.get("departureTime") or irctc_data.get("departure") or "TBD",
+                    "arrival": irctc_data.get("arrivalTime") or irctc_data.get("arrival") or "TBD",
                     "all_berths": all_berths,
                 }
                 print(f"[IRCTC] Parsed result with {len(all_berths)} berths: {result}")
@@ -247,6 +269,7 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                 data.get("message")
                 or data.get("error")
                 or data.get("msg")
+                or data.get("status")
                 or "PNR provider returned no booking data"
             )
             print(f"[IRCTC] API returned success=false: {provider_message}")

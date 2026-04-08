@@ -252,13 +252,6 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                 "/api/v3/getPNRStatus",
                 {"pnr": pnr},
             ),
-            (
-                "rapidapi-pnr-status",
-                "https://pnr_status-pnr-status-indian-railways-v1.p.rapidapi.com",
-                "pnr_status-pnr-status-indian-railways-v1.p.rapidapi.com",
-                "/pnr",
-                {"pnr": pnr},
-            ),
         ]
         last_provider_error = None
 

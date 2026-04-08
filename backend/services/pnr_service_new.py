@@ -73,19 +73,22 @@ def _normalize_journey_date(journey_date: str) -> str:
 def _extract_pnr_current_status(payload: dict) -> str | None:
     for key in [
         "trainStatus",
+        "TrainStatus",
         "currentStatus",
+        "CurrentStatus",
         "current_status",
         "status",
         "chartStatus",
+        "ChartStatus",
     ]:
         value = payload.get(key)
         if value not in (None, "", [], {}):
             return str(value).strip()
 
-    passengers = payload.get("passengers") or payload.get("passengerStatus") or []
+    passengers = _extract_passenger_rows(payload)
     if passengers:
         first_passenger = passengers[0] if isinstance(passengers[0], dict) else {}
-        for key in ["currentStatus", "current_status", "bookingStatus", "currentStatusDetails"]:
+        for key in ["currentStatus", "CurrentStatus", "current_status", "bookingStatus", "BookingStatus", "currentStatusDetails"]:
             value = first_passenger.get(key)
             if value not in (None, "", [], {}):
                 return str(value).strip()
@@ -97,8 +100,10 @@ def _extract_pnr_cancelled(payload: dict, current_status: str | None) -> bool:
     status_text = str(current_status or "").strip().lower()
     raw_value = (
         payload.get("isCancelled")
+        or payload.get("IsCancelled")
         or payload.get("cancelled")
         or payload.get("trainCancelled")
+        or payload.get("TrainCancelledFlag")
         or payload.get("cancelStatus")
     )
 
@@ -112,6 +117,20 @@ def _extract_pnr_cancelled(payload: dict, current_status: str | None) -> bool:
             return True
 
     return "cancel" in status_text
+
+
+def _extract_passenger_rows(payload: dict) -> list[dict]:
+    passengers = payload.get("passengers") or payload.get("passengerStatus") or payload.get("PassengerStatus") or []
+    if isinstance(passengers, dict):
+        rows = []
+        for key in sorted(passengers.keys(), key=lambda item: int(item) if str(item).isdigit() else str(item)):
+            value = passengers.get(key)
+            if isinstance(value, dict):
+                rows.append(value)
+        return rows
+    if isinstance(passengers, list):
+        return [item for item in passengers if isinstance(item, dict)]
+    return []
 
 
 async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) -> PNRDetailsResponse:
@@ -217,31 +236,76 @@ async def _get_pnr_details_uncached(pnr: str, refresh: bool = False) -> dict:
 async def _fetch_from_irctc(pnr: str) -> dict:
     """Fetch real PNR data from IRCTC API."""
     try:
-        headers = {
-            'x-api-key': IRCTC_API_KEY,
-            'x-api-host': IRCTC_API_HOST,
-            'x-rapidapi-key': IRCTC_API_KEY,
-            'x-rapidapi-host': IRCTC_API_HOST,
-            'Content-Type': 'application/json'
-        }
-
         client = await get_shared_http_client()
-        response = await client.get(
-            f"{IRCTC_API_BASE}/pnrStatus",
-            params={"pnr": pnr},
-            headers=headers,
-        )
+        candidate_requests = [
+            (
+                "irctc1-pnrStatus",
+                "https://irctc1.p.rapidapi.com",
+                "irctc1.p.rapidapi.com",
+                "/pnrStatus",
+                {"pnr": pnr},
+            ),
+            (
+                "irctc1-v3-pnr",
+                "https://irctc1.p.rapidapi.com",
+                "irctc1.p.rapidapi.com",
+                "/api/v3/getPNRStatus",
+                {"pnr": pnr},
+            ),
+            (
+                "rapidapi-pnr-status",
+                "https://pnr_status-pnr-status-indian-railways-v1.p.rapidapi.com",
+                "pnr_status-pnr-status-indian-railways-v1.p.rapidapi.com",
+                "/pnr",
+                {"pnr": pnr},
+            ),
+        ]
+        last_provider_error = None
 
-        if response.status_code == 200:
-            data = response.json()
-            print(f"[IRCTC] Successfully fetched PNR data: {data}")
+        for request_name, api_base, api_host, api_path, params in candidate_requests:
+            try:
+                headers = {
+                    "x-api-key": IRCTC_API_KEY,
+                    "x-api-host": api_host,
+                    "x-rapidapi-key": IRCTC_API_KEY,
+                    "x-rapidapi-host": api_host,
+                    "Content-Type": "application/json",
+                }
+                response = await client.get(
+                    f"{api_base}{api_path}",
+                    params=params,
+                    headers=headers,
+                )
+                print(f"[IRCTC] Tried {request_name}: status={response.status_code}")
 
-            payload = data.get("data") if isinstance(data.get("data"), dict) else data
-            success = data.get("success")
-            if success is None:
-                success = bool(payload)
+                if response.status_code != 200:
+                    body_preview = response.text[:300]
+                    last_provider_error = f"PNR API returned {response.status_code}"
+                    print(f"[IRCTC] {request_name} failed: {body_preview}")
+                    continue
 
-            if success:
+                data = response.json()
+                print(f"[IRCTC] Successfully fetched PNR data via {request_name}: {data}")
+
+                payload = data.get("data") if isinstance(data.get("data"), dict) else data
+                success = data.get("success")
+                if success is None:
+                    success = bool(payload)
+
+                if not success:
+                    provider_message = (
+                        data.get("message")
+                        or data.get("error")
+                        or data.get("msg")
+                        or data.get("status")
+                        or "PNR provider returned no booking data"
+                    )
+                    print(f"[IRCTC] {request_name} returned success=false: {provider_message}")
+                    if "not found" in provider_message.lower() or "no booking" in provider_message.lower() or "flushed" in provider_message.lower():
+                        return None
+                    last_provider_error = provider_message
+                    continue
+
                 irctc_data = payload if isinstance(payload, dict) else {}
                 current_status = _extract_pnr_current_status(irctc_data)
                 cancelled = _extract_pnr_cancelled(irctc_data, current_status)
@@ -249,14 +313,16 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                 berth = None
                 all_berths = []
 
-                passengers = irctc_data.get("passengers") or irctc_data.get("passengerStatus") or []
+                passengers = _extract_passenger_rows(irctc_data)
 
                 if passengers:
                     for idx, passenger in enumerate(passengers):
                         current_status = (
                             passenger.get("currentStatus")
+                            or passenger.get("CurrentStatus")
                             or passenger.get("current_status")
                             or passenger.get("bookingStatus")
+                            or passenger.get("BookingStatus")
                             or passenger.get("currentStatusDetails")
                             or ""
                         )
@@ -264,22 +330,22 @@ async def _fetch_from_irctc(pnr: str) -> dict:
 
                         berth_type = status_parts[0] if status_parts else "WL"
                         coach_from_status = (
-                            status_parts[1] if len(status_parts) > 1 else str(passenger.get("coach") or passenger.get("coachNo") or "S1")
+                            status_parts[1] if len(status_parts) > 1 else str(passenger.get("coach") or passenger.get("Coach") or passenger.get("coachNo") or passenger.get("CurrentCoachId") or "S1")
                         )
                         berth_num = (
-                            status_parts[2] if len(status_parts) > 2 else str(passenger.get("berth") or passenger.get("berthNumber") or f"WL{idx+1}")
+                            status_parts[2] if len(status_parts) > 2 else str(passenger.get("berth") or passenger.get("Berth") or passenger.get("berthNumber") or passenger.get("CurrentBerthNo") or f"WL{idx+1}")
                         )
 
                         if not berth_num or berth_num.startswith("WL"):
-                            berth_num = str(passenger.get("berth") or passenger.get("berthNumber")) if (passenger.get("berth") or passenger.get("berthNumber")) else f"WL{idx+1}"
+                            berth_num = str(passenger.get("berth") or passenger.get("Berth") or passenger.get("berthNumber") or passenger.get("CurrentBerthNo")) if (passenger.get("berth") or passenger.get("Berth") or passenger.get("berthNumber") or passenger.get("CurrentBerthNo")) else f"WL{idx+1}"
 
                         berth_data = {
                             "berth_number": str(berth_num),
-                            "berth_type": berth_type,
-                            "passenger_name": passenger.get("name") or passenger.get("passengerName") or f"Passenger {idx+1}",
+                            "berth_type": passenger.get("CurrentBerthCode") or passenger.get("BookingBerthCode") or berth_type,
+                            "passenger_name": passenger.get("name") or passenger.get("Name") or passenger.get("passengerName") or f"Passenger {idx+1}",
                             "status": berth_type or "CNF",
                             "claimed_by": None,
-                            "claimed_at": None
+                            "claimed_at": None,
                         }
                         all_berths.append(berth_data)
 
@@ -288,55 +354,43 @@ async def _fetch_from_irctc(pnr: str) -> dict:
                     first_passenger = passengers[0]
                     first_status = (
                         first_passenger.get("currentStatus")
+                        or first_passenger.get("CurrentStatus")
                         or first_passenger.get("current_status")
                         or first_passenger.get("bookingStatus")
+                        or first_passenger.get("BookingStatus")
                         or first_passenger.get("currentStatusDetails")
                         or ""
                     )
                     first_parts = first_status.split()
-                    coach = first_parts[1] if len(first_parts) > 1 else str(first_passenger.get("coach") or first_passenger.get("coachNo") or "S1")
-                    berth = first_parts[2] if len(first_parts) > 2 else str(first_passenger.get("berth") or first_passenger.get("berthNumber")) if (first_passenger.get("berth") or first_passenger.get("berthNumber")) else None
+                    coach = first_parts[1] if len(first_parts) > 1 else str(first_passenger.get("coach") or first_passenger.get("Coach") or first_passenger.get("coachNo") or first_passenger.get("CurrentCoachId") or "S1")
+                    berth = first_parts[2] if len(first_parts) > 2 else str(first_passenger.get("berth") or first_passenger.get("Berth") or first_passenger.get("berthNumber") or first_passenger.get("CurrentBerthNo")) if (first_passenger.get("berth") or first_passenger.get("Berth") or first_passenger.get("berthNumber") or first_passenger.get("CurrentBerthNo")) else None
 
                 result = {
                     "pnr": pnr,
-                    "train_number": irctc_data.get("trainNumber") or irctc_data.get("trainNo") or "TBD",
-                    "train_name": irctc_data.get("trainName") or irctc_data.get("train_name") or "Unknown Train",
-                    "journey_date": _normalize_journey_date(irctc_data.get("journeyDate") or irctc_data.get("doj") or "TBD"),
+                    "train_number": irctc_data.get("trainNumber") or irctc_data.get("TrainNo") or irctc_data.get("trainNo") or "TBD",
+                    "train_name": irctc_data.get("trainName") or irctc_data.get("TrainName") or irctc_data.get("train_name") or "Unknown Train",
+                    "journey_date": _normalize_journey_date(irctc_data.get("journeyDate") or irctc_data.get("JourneyDate") or irctc_data.get("Doj") or irctc_data.get("doj") or "TBD"),
                     "current_status": current_status,
                     "cancelled": cancelled,
                     "coach": coach,
                     "berth": berth,
-                    "from_station": irctc_data.get("source") or irctc_data.get("boardingPoint") or irctc_data.get("fromStation") or "TBD",
-                    "to_station": irctc_data.get("destination") or irctc_data.get("toStation") or "TBD",
-                    "departure": irctc_data.get("departureTime") or irctc_data.get("departure") or "TBD",
-                    "arrival": irctc_data.get("arrivalTime") or irctc_data.get("arrival") or "TBD",
+                    "from_station": irctc_data.get("source") or irctc_data.get("Source") or irctc_data.get("boardingPoint") or irctc_data.get("BoardingPoint") or irctc_data.get("fromStation") or irctc_data.get("From") or "TBD",
+                    "to_station": irctc_data.get("destination") or irctc_data.get("Destination") or irctc_data.get("toStation") or irctc_data.get("To") or "TBD",
+                    "departure": irctc_data.get("departureTime") or irctc_data.get("DepartureTime") or irctc_data.get("departure") or "TBD",
+                    "arrival": irctc_data.get("arrivalTime") or irctc_data.get("ArrivalTime") or irctc_data.get("arrival") or "TBD",
                     "all_berths": all_berths,
                 }
-                print(f"[IRCTC] Parsed result with {len(all_berths)} berths: {result}")
+                print(f"[IRCTC] Parsed result with {len(all_berths)} berths via {request_name}: {result}")
                 return result
+            except Exception as request_error:
+                last_provider_error = str(request_error)
+                print(f"[IRCTC] {request_name} exception: {request_error}")
+                continue
 
-            provider_message = (
-                data.get("message")
-                or data.get("error")
-                or data.get("msg")
-                or data.get("status")
-                or "PNR provider returned no booking data"
-            )
-            print(f"[IRCTC] API returned success=false: {provider_message}")
-            if "not found" in provider_message.lower() or "no booking" in provider_message.lower() or "flushed" in provider_message.lower():
-                return None
-            return {
-                "pnr": pnr,
-                "status": "provider_error",
-                "error_message": f"UPSTREAM_ERROR: {provider_message}",
-            }
-
-        body_preview = response.text[:300]
-        print(f"[IRCTC] API returned status {response.status_code}, body: {body_preview}")
         return {
             "pnr": pnr,
             "status": "provider_error",
-            "error_message": f"UPSTREAM_ERROR: PNR API returned {response.status_code}",
+            "error_message": f"UPSTREAM_ERROR: {last_provider_error or 'PNR provider unavailable'}",
         }
     except Exception as e:
         print(f"[IRCTC] Error fetching PNR: {str(e)}")

@@ -227,8 +227,8 @@ async def _fetch_from_irctc(pnr: str) -> dict:
 
         client = await get_shared_http_client()
         response = await client.get(
-            f"{IRCTC_API_BASE}/api/v3/getPNRStatus",
-            params={"pnrNumber": pnr},
+            f"{IRCTC_API_BASE}/pnrStatus",
+            params={"pnr": pnr},
             headers=headers,
         )
 

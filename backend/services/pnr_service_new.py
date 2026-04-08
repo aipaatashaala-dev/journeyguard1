@@ -12,9 +12,9 @@ from models.schemas import PNRDetailsResponse
 from services.http_pool import get_shared_http_client
 from services.runtime_controls import AsyncSingleFlight, TTLCache
 
-# IRCTC RapidAPI Configuration
+# PNR RapidAPI Configuration
 IRCTC_API_KEY = os.getenv("IRCTC_API_KEY", "68ad334fc9msh44bddffcf14f1acp17032bjsn61766b1ac602")
-IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "irctc-indian-railway-pnr-status.p.rapidapi.com")
+IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "pnr_status-pnr-status-indian-railways-v1.p.rapidapi.com")
 IRCTC_API_BASE = os.getenv("IRCTC_API_BASE", f"https://{IRCTC_API_HOST}")
 _LOCAL_PNR_CACHE = TTLCache(max_size=1024)
 _PNR_SINGLE_FLIGHT = AsyncSingleFlight()
@@ -227,8 +227,9 @@ async def _fetch_from_irctc(pnr: str) -> dict:
 
         client = await get_shared_http_client()
         response = await client.get(
-            f"{IRCTC_API_BASE}/getPNRStatus/{pnr}",
-            headers=headers
+            f"{IRCTC_API_BASE}/pnr",
+            params={"pnr": pnr},
+            headers=headers,
         )
 
         if response.status_code == 200:

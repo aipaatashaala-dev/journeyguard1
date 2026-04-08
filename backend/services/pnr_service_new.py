@@ -13,7 +13,7 @@ from services.http_pool import get_shared_http_client
 from services.runtime_controls import AsyncSingleFlight, TTLCache
 
 # PNR RapidAPI Configuration
-IRCTC_API_KEY = os.getenv("IRCTC_API_KEY", "68ad334fc9msh44bddffcf14f1acp17032bjsn61766b1ac602")
+IRCTC_API_KEY = os.getenv("IRCTC_API_KEY", "a9a10223ebmshbeb48471fd67482p1be775jsnf88ce8852f7e")
 IRCTC_API_HOST = os.getenv("IRCTC_API_HOST", "irctc1.p.rapidapi.com")
 IRCTC_API_BASE = os.getenv("IRCTC_API_BASE", f"https://{IRCTC_API_HOST}")
 _LOCAL_PNR_CACHE = TTLCache(max_size=1024)
@@ -239,18 +239,11 @@ async def _fetch_from_irctc(pnr: str) -> dict:
         client = await get_shared_http_client()
         candidate_requests = [
             (
-                "irctc1-pnrStatus",
-                "https://irctc1.p.rapidapi.com",
-                "irctc1.p.rapidapi.com",
-                "/pnrStatus",
-                {"pnr": pnr},
-            ),
-            (
                 "irctc1-v3-pnr",
                 "https://irctc1.p.rapidapi.com",
                 "irctc1.p.rapidapi.com",
                 "/api/v3/getPNRStatus",
-                {"pnr": pnr},
+                {"pnrNumber": pnr},
             ),
         ]
         last_provider_error = None

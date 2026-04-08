@@ -131,7 +131,8 @@ async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) 
                 raise Exception(f"PNR {pnr} not found - no booking available")
             if local_cached.get("status") == "provider_error":
                 raise Exception(local_cached.get("error_message") or "UPSTREAM_ERROR: PNR provider unavailable")
-            return _format_pnr_response(local_cached)
+            payload = {**local_cached, "request_user_id": user_id}
+            return _format_pnr_response(payload)
 
     async def load():
         result = await _get_pnr_details_uncached(pnr, refresh=refresh)
@@ -144,7 +145,7 @@ async def get_pnr_details(pnr: str, user_id: str = None, refresh: bool = False) 
             raise Exception(f"PNR {pnr} not found - no booking available")
         if result.get("status") == "provider_error":
             raise Exception(result.get("error_message") or "UPSTREAM_ERROR: PNR provider unavailable")
-        return _format_pnr_response(result)
+        return _format_pnr_response({**result, "request_user_id": user_id})
 
     if refresh:
         return await load()
@@ -390,15 +391,39 @@ def _format_pnr_response(pnr_data: dict) -> PNRDetailsResponse:
     """Format PNR data into response model and get available berths."""
     # Get all berths from PNR data
     all_berths = pnr_data.get("all_berths", [])
-    
+    user_id = pnr_data.get("request_user_id")
+    selected_berth = None
+
     # Get claimed berths from Firebase
     claimed_berths = _get_claimed_berths(pnr_data.get("pnr"))
-    
-    # Calculate available berths (all API berths that haven't been claimed by users)
+
+    # Calculate available berths, but keep the current user's own berth visible/selectable.
     available_berths = []
+    normalized_all_berths = []
     for berth in all_berths:
-        if berth["berth_number"] not in claimed_berths:
-            available_berths.append(berth["berth_number"])
+        berth_number = str(berth.get("berth_number") or "").strip()
+        claim_info = claimed_berths.get(berth_number)
+        claimed_by = claim_info.get("claimed_by") if isinstance(claim_info, dict) else None
+        claimed_at = claim_info.get("claimed_at") if isinstance(claim_info, dict) else None
+        claimed_by_current_user = bool(user_id and claimed_by == user_id)
+
+        berth_payload = {
+            **berth,
+            "berth_number": berth_number,
+            "claimed_by": claimed_by,
+            "claimed_at": claimed_at,
+        }
+
+        if claimed_by_current_user:
+            selected_berth = berth_number
+            berth_payload["status"] = "SELECTED"
+            available_berths.append(berth_number)
+        elif claim_info:
+            berth_payload["status"] = "CLAIMED"
+        else:
+            available_berths.append(berth_number)
+
+        normalized_all_berths.append(berth_payload)
     
     return PNRDetailsResponse(
         pnr=pnr_data.get("pnr"),
@@ -408,25 +433,26 @@ def _format_pnr_response(pnr_data: dict) -> PNRDetailsResponse:
         run_date=pnr_data.get("journey_date"),
         current_status=pnr_data.get("current_status"),
         cancelled=bool(pnr_data.get("cancelled", False)),
+        selected_berth=selected_berth,
         coach=pnr_data.get("coach"),
         berth=pnr_data.get("berth"),
         from_station=pnr_data.get("from_station"),
         to_station=pnr_data.get("to_station"),
         departure=pnr_data.get("departure"),
         arrival=pnr_data.get("arrival"),
-        all_berths=all_berths,
+        all_berths=normalized_all_berths,
         available_berths=available_berths,
     )
 
 
-def _get_claimed_berths(pnr: str) -> set:
-    """Get all berths that have been claimed by users for this PNR."""
+def _get_claimed_berths(pnr: str) -> dict:
+    """Get all berth claims for this PNR keyed by berth number."""
     try:
         claims_ref = fb_db.reference(f"pnr_berth_claims/{pnr}")
         claims_data = claims_ref.get()
-        if claims_data:
-            return set(claims_data.keys())
-        return set()
+        if isinstance(claims_data, dict):
+            return claims_data
+        return {}
     except Exception as e:
         print(f"[PNR] Warning: Could not get claimed berths: {str(e)}")
-        return set()
+        return {}

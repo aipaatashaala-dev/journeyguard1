@@ -157,6 +157,7 @@ class PNRDetailsResponse(BaseModel):
     run_date: Optional[str] = None
     current_status: Optional[str] = None
     cancelled: bool = False
+    selected_berth: Optional[str] = None
     coach: str
     from_station: str
     to_station: str

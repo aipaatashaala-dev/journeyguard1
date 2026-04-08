@@ -48,12 +48,35 @@ async def claim_berth(pnr: str, request: ClaimBerthRequest, current_user: dict =
     try:
         user_id = current_user.get("uid")
         berth_number = request.berth_number.strip()
+        pnr_data = fb_db.reference(f"pnr_data/{pnr}").get() or {}
+        valid_berths = {
+            str(item.get("berth_number") or "").strip()
+            for item in (pnr_data.get("all_berths") or [])
+            if isinstance(item, dict)
+        }
+        if valid_berths and berth_number not in valid_berths:
+            raise HTTPException(status_code=404, detail=f"Berth {berth_number} was not found for PNR {pnr}")
+
+        existing_claims_ref = fb_db.reference(f"pnr_berth_claims/{pnr}")
+        existing_claims = existing_claims_ref.get() or {}
+        previous_user_berths = [
+            existing_berth
+            for existing_berth, existing_claim in existing_claims.items()
+            if existing_berth != berth_number
+            and isinstance(existing_claim, dict)
+            and existing_claim.get("claimed_by") == user_id
+        ]
+
         claims_ref = fb_db.reference(f"pnr_berth_claims/{pnr}/{berth_number}")
         claim_data = {
             "pnr": pnr,
             "berth_number": berth_number,
             "claimed_by": user_id,
             "claimed_at": datetime.now().isoformat(),
+            "journey_date": pnr_data.get("journey_date"),
+            "run_date": pnr_data.get("journey_date"),
+            "train_number": pnr_data.get("train_number"),
+            "coach": pnr_data.get("coach"),
         }
 
         def claim_if_available(current):
@@ -68,6 +91,9 @@ async def claim_berth(pnr: str, request: ClaimBerthRequest, current_user: dict =
                 detail=f"Berth {berth_number} is already selected by another user"
             )
 
+        for existing_berth in previous_user_berths:
+            existing_claims_ref.child(existing_berth).delete()
+
         print(f"[PNR] User {user_id} claimed berth {berth_number} for PNR {pnr}")
         
         # Also store in user's journey data
@@ -76,6 +102,10 @@ async def claim_berth(pnr: str, request: ClaimBerthRequest, current_user: dict =
             "pnr": pnr,
             "berth": berth_number,
             "claimed_at": datetime.now().isoformat(),
+            "journey_date": pnr_data.get("journey_date"),
+            "run_date": pnr_data.get("journey_date"),
+            "train_number": pnr_data.get("train_number"),
+            "coach": pnr_data.get("coach"),
         })
         
         return {
@@ -83,6 +113,10 @@ async def claim_berth(pnr: str, request: ClaimBerthRequest, current_user: dict =
             "message": f"Berth {berth_number} selected successfully",
             "pnr": pnr,
             "berth": berth_number,
+            "journey_date": pnr_data.get("journey_date"),
+            "run_date": pnr_data.get("journey_date"),
+            "train_number": pnr_data.get("train_number"),
+            "coach": pnr_data.get("coach"),
         }
     
     except HTTPException:

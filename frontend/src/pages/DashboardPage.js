@@ -415,9 +415,12 @@ export default function DashboardPage() {
       }
 
       const data = await res.json();
+      const resolvedBerth = data.selected_berth
+        || data.berth
+        || (Array.isArray(data.available_berths) && data.available_berths.length === 1 ? data.available_berths[0] : '');
       setPnrDetails(data);
       setPnrLookupError('');
-      setSelectedBerth(data.selected_berth || (Array.isArray(data.available_berths) && data.available_berths.length === 1 ? data.available_berths[0] : ''));
+      setSelectedBerth(resolvedBerth);
       setPnrFallback((prev) => ({
         ...prev,
         trainNumber: data.train_number || prev.trainNumber,
@@ -518,8 +521,11 @@ export default function DashboardPage() {
         });
         if (refreshRes.ok) {
           const refreshed = await refreshRes.json();
+          const resolvedBerth = refreshed.selected_berth
+            || refreshed.berth
+            || (Array.isArray(refreshed.available_berths) && refreshed.available_berths.length === 1 ? refreshed.available_berths[0] : '');
           setPnrDetails(refreshed);
-          setSelectedBerth(refreshed.selected_berth || '');
+          setSelectedBerth(resolvedBerth);
         }
         setLoading(false);
         return;
@@ -584,6 +590,15 @@ export default function DashboardPage() {
     setGeneralTrainDetails(null);
     setGeneralTrainConfirmed(false);
   };
+
+  const pnrAllBerths = pnrDetails?.all_berths || [];
+  const pnrAvailableBerths = pnrDetails?.available_berths || [];
+  const resolvedPnrBerth = selectedBerth || pnrDetails?.selected_berth || pnrDetails?.berth || '';
+  const hasParsedPnrBerths = pnrAllBerths.length > 0;
+  const allPnrBerthsClaimed = hasParsedPnrBerths && !pnrDetails?.selected_berth && pnrAvailableBerths.length === 0;
+  const pnrStatusText = String(pnrDetails?.current_status || '').trim();
+  const pnrChartPending = /chart\s+not\s+prepared/i.test(pnrStatusText);
+  const shouldShowPnrBerthSelector = !pnrDetails?.selected_berth && pnrAllBerths.length > 1 && pnrAvailableBerths.length > 1;
 
   const quickCards = [
     {
@@ -962,68 +977,74 @@ export default function DashboardPage() {
                   <div><strong>Journey date</strong><div>{describeRunDate(pnrDetails.journey_date || '')}</div></div>
                   <div><strong>Run date</strong><div>{describeRunDate(pnrDetails.run_date || pnrDetails.journey_date || '')}</div></div>
                 </div>
-                <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', marginTop: '0.85rem' }}>
-                  <span
-                    className="action-chip"
-                    style={{
-                      cursor: 'default',
-                      color: pnrDetails.cancelled ? 'var(--danger)' : 'var(--success)',
-                      background: pnrDetails.cancelled ? 'rgba(223,79,104,0.12)' : 'rgba(31,157,114,0.12)',
-                      borderColor: 'transparent',
-                    }}
-                  >
-                    Status: {pnrDetails.current_status || (pnrDetails.cancelled ? 'Cancelled' : 'Confirmed')}
-                  </span>
-                </div>
               </div>
 
               <div>
-                <label style={{ display: 'block', marginBottom: '0.6rem', fontWeight: 600 }}>Select berth</label>
-                <div style={{ color: 'var(--text2)', fontSize: '0.9rem', marginBottom: '0.8rem' }}>
-                  If this PNR has multiple passengers, choose your own seat number. Already selected seats are hidden for other users.
-                </div>
-                {!pnrDetails.selected_berth && (!pnrDetails.available_berths || pnrDetails.available_berths.length === 0) && (
-                  <div className="glass-card" style={{ padding: '0.95rem', marginBottom: '0.8rem', color: 'var(--danger)', background: 'rgba(223,79,104,0.08)' }}>
-                    All seats from this PNR have already been selected by other users.
+                {shouldShowPnrBerthSelector ? (
+                  <>
+                    <label style={{ display: 'block', marginBottom: '0.6rem', fontWeight: 600 }}>Select berth</label>
+                    <div style={{ color: 'var(--text2)', fontSize: '0.9rem', marginBottom: '0.8rem' }}>
+                      If this PNR has multiple passengers, choose your own seat number. Already selected seats are hidden for other users.
+                    </div>
+                    {allPnrBerthsClaimed && (
+                      <div className="glass-card" style={{ padding: '0.95rem', marginBottom: '0.8rem', color: 'var(--danger)', background: 'rgba(223,79,104,0.08)' }}>
+                        All seats from this PNR have already been selected by other users.
+                      </div>
+                    )}
+                    <div className="dashboard-grid">
+                      {pnrAllBerths.map((berth) => (
+                        (() => {
+                          const isAvailable = pnrAvailableBerths.includes(berth.berth_number);
+                          const isSelected = selectedBerth === berth.berth_number;
+                          const isMine = pnrDetails.selected_berth === berth.berth_number;
+                          return (
+                            <button
+                              key={berth.berth_number}
+                              type="button"
+                              onClick={() => isAvailable && setSelectedBerth(berth.berth_number)}
+                              disabled={!isAvailable}
+                              style={{
+                                padding: '0.9rem',
+                                borderRadius: 16,
+                                border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border)',
+                                background: isSelected
+                                  ? 'rgba(0,229,192,0.12)'
+                                  : isAvailable
+                                    ? 'var(--surface2)'
+                                    : 'rgba(223,79,104,0.08)',
+                                color: isAvailable ? 'var(--text)' : 'var(--text2)',
+                                textAlign: 'left',
+                                cursor: isAvailable ? 'pointer' : 'not-allowed',
+                                opacity: isAvailable ? 1 : 0.7,
+                              }}
+                            >
+                              <div style={{ fontWeight: 700 }}>Berth {berth.berth_number}</div>
+                              <div style={{ fontSize: '0.82rem', color: 'var(--text2)' }}>{berth.passenger_name}</div>
+                              <div style={{ fontSize: '0.78rem', marginTop: '0.35rem', color: isMine ? 'var(--success)' : (!isAvailable ? 'var(--danger)' : 'var(--text2)') }}>
+                                {isMine ? 'Already selected by you' : (!isAvailable ? 'Already selected' : 'Available')}
+                              </div>
+                            </button>
+                          );
+                        })()
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  <div className="glass-card" style={{ padding: '0.95rem' }}>
+                    <div style={{ fontWeight: 700, marginBottom: '0.3rem' }}>Berth confirmed</div>
+                    <div style={{ color: 'var(--text2)', fontSize: '0.92rem' }}>
+                      {resolvedPnrBerth
+                        ? `Using berth ${resolvedPnrBerth} from your PNR details.`
+                        : allPnrBerthsClaimed
+                          ? 'All seats from this PNR have already been selected by other users.'
+                          : !hasParsedPnrBerths && pnrChartPending
+                            ? 'Berth details are not available yet because the chart is not prepared.'
+                            : !hasParsedPnrBerths
+                              ? 'Berth details are not available from this PNR response yet.'
+                          : 'No alternate berth selection is needed for this PNR.'}
+                    </div>
                   </div>
                 )}
-                <div className="dashboard-grid">
-                  {(pnrDetails.all_berths || []).map((berth) => (
-                    (() => {
-                      const isAvailable = (pnrDetails.available_berths || []).includes(berth.berth_number);
-                      const isSelected = selectedBerth === berth.berth_number;
-                      const isMine = pnrDetails.selected_berth === berth.berth_number;
-                      return (
-                        <button
-                          key={berth.berth_number}
-                          type="button"
-                          onClick={() => isAvailable && setSelectedBerth(berth.berth_number)}
-                          disabled={!isAvailable}
-                          style={{
-                            padding: '0.9rem',
-                            borderRadius: 16,
-                            border: isSelected ? '2px solid var(--accent)' : '1px solid var(--border)',
-                            background: isSelected
-                              ? 'rgba(0,229,192,0.12)'
-                              : isAvailable
-                                ? 'var(--surface2)'
-                                : 'rgba(223,79,104,0.08)',
-                            color: isAvailable ? 'var(--text)' : 'var(--text2)',
-                            textAlign: 'left',
-                            cursor: isAvailable ? 'pointer' : 'not-allowed',
-                            opacity: isAvailable ? 1 : 0.7,
-                          }}
-                        >
-                          <div style={{ fontWeight: 700 }}>Berth {berth.berth_number}</div>
-                          <div style={{ fontSize: '0.82rem', color: 'var(--text2)' }}>{berth.passenger_name}</div>
-                          <div style={{ fontSize: '0.78rem', marginTop: '0.35rem', color: isMine ? 'var(--success)' : (!isAvailable ? 'var(--danger)' : 'var(--text2)') }}>
-                            {isMine ? 'Already selected by you' : (!isAvailable ? 'Already selected' : 'Available')}
-                          </div>
-                        </button>
-                      );
-                    })()
-                  ))}
-                </div>
               </div>
               {pnrDetails.cancelled && (
                 <div className="glass-card" style={{ padding: '0.95rem', color: 'var(--danger)', background: 'rgba(223,79,104,0.08)' }}>

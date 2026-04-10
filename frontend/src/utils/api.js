@@ -108,3 +108,7 @@ export const stopProtection = () =>
   api.post('/protection/stop');
 export const updateProtectionLocation = (data) =>
   api.post('/protection/location', data);
+export const startProtectionRing = (data = {}) =>
+  api.post('/protection/ring/start', data);
+export const stopProtectionRing = (data = {}) =>
+  api.post('/protection/ring/stop', data);

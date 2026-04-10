@@ -27,6 +27,8 @@ def _default_state(user: dict) -> dict:
         "lng": None,
         "accuracy": None,
         "source": "remote-dashboard",
+        "ring_requested_at": 0,
+        "ring_stop_requested_at": 0,
     }
 
 
@@ -55,7 +57,7 @@ async def start_protection(
         "location_enabled": body.location_enabled,
         "email": user.get("email"),
         "updated_at": now,
-        "source": "remote-dashboard",
+        "source": body.source or "remote-dashboard",
     }
     if not current.get("started_at"):
         updates["started_at"] = now
@@ -64,15 +66,52 @@ async def start_protection(
     return ProtectionStateResponse(**_load_state(user))
 
 
+@router.post("/ring/start", response_model=ProtectionStateResponse)
+async def start_ring(
+    body: ProtectionCommandRequest | None = None,
+    user: dict = Depends(get_current_user),
+):
+    uid = user["uid"]
+    now = int(time.time() * 1000)
+    _protection_ref(uid).update(
+        {
+            "updated_at": now,
+            "source": (body.source if body else None) or "remote-dashboard",
+            "ring_requested_at": now,
+        }
+    )
+    return ProtectionStateResponse(**_load_state(user))
+
+
+@router.post("/ring/stop", response_model=ProtectionStateResponse)
+async def stop_ring(
+    body: ProtectionCommandRequest | None = None,
+    user: dict = Depends(get_current_user),
+):
+    uid = user["uid"]
+    now = int(time.time() * 1000)
+    _protection_ref(uid).update(
+        {
+            "updated_at": now,
+            "source": (body.source if body else None) or "remote-dashboard",
+            "ring_stop_requested_at": now,
+        }
+    )
+    return ProtectionStateResponse(**_load_state(user))
+
+
 @router.post("/stop", response_model=ProtectionStateResponse)
-async def stop_protection(user: dict = Depends(get_current_user)):
+async def stop_protection(
+    body: ProtectionCommandRequest | None = None,
+    user: dict = Depends(get_current_user),
+):
     uid = user["uid"]
     now = int(time.time() * 1000)
     _protection_ref(uid).update(
         {
             "active": False,
             "updated_at": now,
-            "source": "remote-dashboard",
+            "source": (body.source if body else None) or "remote-dashboard",
         }
     )
     return ProtectionStateResponse(**_load_state(user))
@@ -95,7 +134,7 @@ async def update_protection_location(
         "lat": body.lat,
         "lng": body.lng,
         "accuracy": body.accuracy,
-        "source": "remote-dashboard",
+        "source": body.source or current.get("source") or "remote-dashboard",
     }
 
     if current.get("started_at"):

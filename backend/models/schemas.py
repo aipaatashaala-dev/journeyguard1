@@ -328,6 +328,7 @@ class RequestResponse(BaseModel):
 
 class ProtectionCommandRequest(BaseModel):
     location_enabled: bool = False
+    source: str = "remote-dashboard"
 
 
 class ProtectionLocationUpdateRequest(BaseModel):
@@ -335,6 +336,7 @@ class ProtectionLocationUpdateRequest(BaseModel):
     lng: float
     accuracy: Optional[float] = None
     location_enabled: bool = True
+    source: str = "remote-dashboard"
 
 
 class ProtectionStateResponse(BaseModel):
@@ -347,3 +349,5 @@ class ProtectionStateResponse(BaseModel):
     lng: Optional[float] = None
     accuracy: Optional[float] = None
     source: Optional[str] = None
+    ring_requested_at: Optional[int] = 0
+    ring_stop_requested_at: Optional[int] = 0

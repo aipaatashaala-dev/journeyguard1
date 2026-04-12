@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import {
+  getApiErrorMessage,
   getProtectionState,
   startProtection,
   startProtectionRing,
@@ -78,7 +79,7 @@ export default function ProtectionPage() {
     } catch (error) {
       console.error('Could not load protection state:', error);
       if (showLoading) {
-        toast.error(error?.response?.data?.detail || 'Could not load protection status');
+        toast.error(getApiErrorMessage(error, 'Could not load protection status'));
       }
     } finally {
       if (showLoading) setLoadingState(false);
@@ -122,7 +123,7 @@ export default function ProtectionPage() {
       setProtectionState({ ...defaultProtectionState, ...data });
       toast.success('Protection start command sent');
     } catch (error) {
-      toast.error(error?.response?.data?.detail || 'Could not start protection');
+      toast.error(getApiErrorMessage(error, 'Could not start protection'));
     } finally {
       setSavingState(false);
     }
@@ -135,7 +136,7 @@ export default function ProtectionPage() {
       setProtectionState({ ...defaultProtectionState, ...data });
       toast.success('Protection stop command sent');
     } catch (error) {
-      toast.error(error?.response?.data?.detail || 'Could not stop protection');
+      toast.error(getApiErrorMessage(error, 'Could not stop protection'));
     } finally {
       setSavingState(false);
     }
@@ -148,7 +149,7 @@ export default function ProtectionPage() {
       setProtectionState({ ...defaultProtectionState, ...data });
       toast.success('Ring command sent to the phone');
     } catch (error) {
-      toast.error(error?.response?.data?.detail || 'Could not start ring');
+      toast.error(getApiErrorMessage(error, 'Could not start ring'));
     } finally {
       setSavingState(false);
     }
@@ -161,10 +162,19 @@ export default function ProtectionPage() {
       setProtectionState({ ...defaultProtectionState, ...data });
       toast.success('Stop ring command sent');
     } catch (error) {
-      toast.error(error?.response?.data?.detail || 'Could not stop ring');
+      toast.error(getApiErrorMessage(error, 'Could not stop ring'));
     } finally {
       setSavingState(false);
     }
+  };
+
+  const handleToggleRing = async () => {
+    if (isRinging) {
+      await handleStopRing();
+      return;
+    }
+
+    await handleStartRing();
   };
 
   return (
@@ -247,19 +257,11 @@ export default function ProtectionPage() {
               <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  onClick={handleStartRing}
+                  onClick={handleToggleRing}
                   className="btn btn-primary"
                   disabled={savingState || loadingState}
                 >
-                  Start Ring
-                </button>
-                <button
-                  type="button"
-                  onClick={handleStopRing}
-                  className="btn btn-secondary"
-                  disabled={savingState || loadingState || !isRinging}
-                >
-                  Stop Ring
+                  {isRinging ? 'Stop Ringing Mobile Remotely' : 'Start Ringing Mobile Remotely'}
                 </button>
               </div>
             </div>

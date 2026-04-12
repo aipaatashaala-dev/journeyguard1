@@ -17,6 +17,41 @@ api.interceptors.request.use(async (config) => {
 
 export default api;
 
+export const getApiErrorMessage = (error, fallback = 'Request failed') => {
+  const detail = error?.response?.data?.detail;
+  const message = error?.response?.data?.message;
+
+  if (typeof detail === 'string' && detail.trim()) return detail;
+  if (typeof message === 'string' && message.trim()) return message;
+
+  if (Array.isArray(detail) && detail.length > 0) {
+    return detail
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        if (item?.msg && item?.loc) {
+          const loc = Array.isArray(item.loc) ? item.loc.join('.') : String(item.loc);
+          return `${loc}: ${item.msg}`;
+        }
+        if (item?.msg) return item.msg;
+        return '';
+      })
+      .filter(Boolean)
+      .join(' | ') || fallback;
+  }
+
+  if (detail && typeof detail === 'object') {
+    if (detail.message) return String(detail.message);
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return fallback;
+    }
+  }
+
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message;
+  return fallback;
+};
+
 const readStoredJourneySnapshot = () => {
   try {
     const stored = JSON.parse(localStorage.getItem('jg_journey') || 'null');

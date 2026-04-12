@@ -18,6 +18,12 @@ backend/firebase-credentials.json
 *.json
 .env
 
+node_modules/
+frontend/build/
+*.apk
+*.iml
+.gradle/
+
 
 node_modules/
 backend/firebase-credentials.json

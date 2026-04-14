@@ -5,12 +5,6 @@ import toast from 'react-hot-toast';
 import { Shield, Mail, Lock, Eye, EyeOff, TrainFront, Ticket, ArrowRight } from 'lucide-react';
 import { db, firebaseConfigLooksPlaceholder } from '../firebase';
 import { ref, set, get } from 'firebase/database';
-import {
-  requestPasswordResetOtp,
-  verifyPasswordResetOtp,
-  resetPasswordWithOtp,
-  getApiErrorMessage,
-} from '../utils/api';
 
 function GoogleLogo() {
   return (
@@ -28,17 +22,8 @@ export default function AuthPage() {
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ email: '', password: '', confirmPassword: '' });
   const [loading, setLoading] = useState(false);
-  const [resetLoading, setResetLoading] = useState(false);
   const [showPw, setShowPw] = useState(false);
   const [showPasswordSetup, setShowPasswordSetup] = useState(false);
-  const [showForgotPassword, setShowForgotPassword] = useState(false);
-  const [forgotPassword, setForgotPassword] = useState({
-    email: '',
-    otp: '',
-    resetToken: '',
-    password: '',
-    confirmPassword: '',
-  });
   const { register, login, loginWithGoogle } = useAuth();
   const navigate = useNavigate();
 
@@ -50,8 +35,6 @@ export default function AuthPage() {
   }, [location.search]);
 
   const update = (field) => (e) => setForm({ ...form, [field]: e.target.value });
-  const updateForgotPassword = (field) => (e) =>
-    setForgotPassword((prev) => ({ ...prev, [field]: e.target.value }));
 
   const getSocialSignInError = (error) => {
     const providerLabel = 'Google';
@@ -178,72 +161,6 @@ export default function AuthPage() {
       toast.error(getSocialSignInError(e), { duration: 6000 });
     }
     setLoading(false);
-  };
-
-  const handleRequestResetOtp = async (e) => {
-    e.preventDefault();
-    if (!forgotPassword.email) return toast.error('Enter your email address');
-
-    setResetLoading(true);
-    try {
-      await requestPasswordResetOtp({ email: forgotPassword.email });
-      setForgotPassword((prev) => ({ ...prev, otp: '', resetToken: '', password: '', confirmPassword: '' }));
-      toast.success('OTP sent to your email');
-    } catch (error) {
-      toast.error(getApiErrorMessage(error, 'Could not send reset OTP'));
-    } finally {
-      setResetLoading(false);
-    }
-  };
-
-  const handleVerifyResetOtp = async (e) => {
-    e.preventDefault();
-    if (!forgotPassword.email || !forgotPassword.otp) return toast.error('Enter email and OTP');
-
-    setResetLoading(true);
-    try {
-      const { data } = await verifyPasswordResetOtp({
-        email: forgotPassword.email,
-        otp: forgotPassword.otp,
-      });
-      setForgotPassword((prev) => ({ ...prev, resetToken: data?.reset_token || '' }));
-      toast.success('OTP verified. Set your new password.');
-    } catch (error) {
-      toast.error(getApiErrorMessage(error, 'Could not verify OTP'));
-    } finally {
-      setResetLoading(false);
-    }
-  };
-
-  const handleResetPassword = async (e) => {
-    e.preventDefault();
-    if (!forgotPassword.resetToken) return toast.error('Verify OTP first');
-    if (!forgotPassword.password || !forgotPassword.confirmPassword) return toast.error('Enter the new password');
-    if (forgotPassword.password.length < 6) return toast.error('Password must be at least 6 characters');
-    if (forgotPassword.password !== forgotPassword.confirmPassword) return toast.error('Passwords do not match');
-
-    setResetLoading(true);
-    try {
-      await resetPasswordWithOtp({
-        email: forgotPassword.email,
-        reset_token: forgotPassword.resetToken,
-        password: forgotPassword.password,
-        confirm_password: forgotPassword.confirmPassword,
-      });
-      setShowForgotPassword(false);
-      setForgotPassword({
-        email: '',
-        otp: '',
-        resetToken: '',
-        password: '',
-        confirmPassword: '',
-      });
-      toast.success('Password updated. You can sign in now.');
-    } catch (error) {
-      toast.error(getApiErrorMessage(error, 'Could not reset password'));
-    } finally {
-      setResetLoading(false);
-    }
   };
 
   return (
@@ -444,61 +361,10 @@ export default function AuthPage() {
           </form>
 
           {mode === 'login' && (
-            <div style={{ marginTop: '0.9rem', display: 'grid', gap: '0.9rem' }}>
-              <button
-                type="button"
-                onClick={() => setShowForgotPassword((value) => !value)}
-                style={{ background: 'none', border: 'none', color: 'var(--rail-gold)', cursor: 'pointer', fontWeight: 700, justifySelf: 'center' }}
-              >
-                {showForgotPassword ? 'Hide forgot password' : 'Forgot password?'}
-              </button>
-
-              {showForgotPassword && (
-                <div className="glass-card" style={{ padding: '1rem', display: 'grid', gap: '0.85rem' }}>
-                  <div>
-                    <h3 style={{ marginBottom: '0.35rem' }}>Reset password with email OTP</h3>
-                    <p style={{ color: 'var(--text2)', lineHeight: 1.7, margin: 0 }}>
-                      Enter your email, verify the OTP sent there, then choose a new password.
-                    </p>
-                  </div>
-
-                  <form onSubmit={handleRequestResetOtp} style={{ display: 'grid', gap: '0.75rem' }}>
-                    <div className="input-group" style={{ marginBottom: 0 }}>
-                      <label>Email Address</label>
-                      <input type="email" value={forgotPassword.email} onChange={updateForgotPassword('email')} placeholder="you@example.com" />
-                    </div>
-                    <button type="submit" className="btn btn-secondary" disabled={resetLoading} style={{ justifyContent: 'center' }}>
-                      {resetLoading ? <span className="spinner" /> : 'Send OTP'}
-                    </button>
-                  </form>
-
-                  <form onSubmit={handleVerifyResetOtp} style={{ display: 'grid', gap: '0.75rem' }}>
-                    <div className="input-group" style={{ marginBottom: 0 }}>
-                      <label>OTP</label>
-                      <input type="text" value={forgotPassword.otp} onChange={updateForgotPassword('otp')} placeholder="Enter 6-digit OTP" maxLength={6} />
-                    </div>
-                    <button type="submit" className="btn btn-secondary" disabled={resetLoading || !forgotPassword.email} style={{ justifyContent: 'center' }}>
-                      {resetLoading ? <span className="spinner" /> : 'Verify OTP'}
-                    </button>
-                  </form>
-
-                  {forgotPassword.resetToken && (
-                    <form onSubmit={handleResetPassword} style={{ display: 'grid', gap: '0.75rem' }}>
-                      <div className="input-group" style={{ marginBottom: 0 }}>
-                        <label>New Password</label>
-                        <input type={showPw ? 'text' : 'password'} value={forgotPassword.password} onChange={updateForgotPassword('password')} placeholder="New password" />
-                      </div>
-                      <div className="input-group" style={{ marginBottom: 0 }}>
-                        <label>Confirm New Password</label>
-                        <input type={showPw ? 'text' : 'password'} value={forgotPassword.confirmPassword} onChange={updateForgotPassword('confirmPassword')} placeholder="Confirm new password" />
-                      </div>
-                      <button type="submit" className="btn btn-primary" disabled={resetLoading} style={{ justifyContent: 'center' }}>
-                        {resetLoading ? <span className="spinner" /> : 'Set New Password'}
-                      </button>
-                    </form>
-                  )}
-                </div>
-              )}
+            <div style={{ marginTop: '0.9rem', textAlign: 'center' }}>
+              <Link to="/forgot-password" style={{ color: 'var(--rail-gold)', fontWeight: 700, textDecoration: 'none' }}>
+                Forgot password?
+              </Link>
             </div>
           )}
 

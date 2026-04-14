@@ -5,6 +5,7 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import MainLayout from './components/MainLayout';
 import LandingPage from './pages/LandingPage';
 import AuthPage from './pages/AuthPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import DashboardPage from './pages/DashboardPage';
 import JourneyPage from './pages/JourneyPage';
 import GroupPage from './pages/GroupPage';
@@ -42,6 +43,7 @@ function AppRoutes() {
     <Routes>
       <Route path="/" element={<LandingPage />} />
       <Route path="/auth" element={<PublicRoute><AuthPage /></PublicRoute>} />
+      <Route path="/forgot-password" element={<PublicRoute><ForgotPasswordPage /></PublicRoute>} />
       <Route path="/track/:token" element={<LocationSharePage />} />
       <Route path="/admin" element={<AdminLogin />} />
       <Route path="/admin/dashboard" element={<AdminRoute><AdminDashboard /></AdminRoute>} />

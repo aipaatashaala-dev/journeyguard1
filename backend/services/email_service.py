@@ -322,3 +322,21 @@ def send_admin_otp_email(to_email: str, otp: str, expires_minutes: int = 10) -> 
         footer=f"Sent to {to_email}",
     )
     return _send(to_email, subject, html)
+
+
+def send_password_reset_otp_email(to_email: str, otp: str, expires_minutes: int = 10) -> bool:
+    subject = "JourneyGuard | Password Reset OTP"
+    html = _render_email(
+        title="Reset Your Password",
+        intro="Use the one-time password below to verify your email and set a new JourneyGuard password.",
+        details=[
+            ("OTP", otp),
+            ("Expires In", f"{expires_minutes} minutes"),
+        ],
+        note=(
+            "If you did not request a password reset, you can ignore this email. "
+            "Your current password will stay unchanged until the OTP is verified."
+        ),
+        footer=f"Sent to {to_email}",
+    )
+    return _send(to_email, subject, html)

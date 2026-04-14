@@ -16,7 +16,7 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 _group_monitor_lock = threading.Lock()
 _group_monitor_events: dict[str, threading.Event] = {}
-_FALLBACK_GROUP_RETENTION_HOURS = 24
+_FALLBACK_GROUP_RETENTION_HOURS = 3
 TRAIN_GROUP_CHANNEL_ID = "train_chat"
 
 
@@ -442,7 +442,7 @@ def _delete_expired_group_if_needed(group_id: str, metadata: dict, now_ms: int |
 
 def _mark_group_arrived(group_id: str, metadata: dict, train_info: TrainInfoResponse | None = None):
     now_ms = int(time.time() * 1000)
-    cleanup_at = now_ms + 60 * 60 * 1000
+    cleanup_at = now_ms + _FALLBACK_GROUP_RETENTION_HOURS * 60 * 60 * 1000
 
     current_station = None
     expected_arrival = None
@@ -463,7 +463,7 @@ def _mark_group_arrived(group_id: str, metadata: dict, train_info: TrainInfoResp
     _post_system_message(
         group_id,
         "system_arrival_notice",
-        f"Train has reached {destination}. This group will be deleted automatically in 1 hour.",
+        f"Train has reached {destination}. This group will be deleted automatically in {_FALLBACK_GROUP_RETENTION_HOURS} hours.",
         timestamp_ms=now_ms,
     )
 
@@ -777,6 +777,13 @@ async def join_journey(body: JoinJourneyRequest, user: dict = Depends(get_curren
         grace_hours=_FALLBACK_GROUP_RETENTION_HOURS,
     )
 
+    blocked_state = fb_db.reference(f"train_groups/{group_id}/blocked_users/{uid}").get() or {}
+    if isinstance(blocked_state, dict) and blocked_state.get("blocked"):
+        raise HTTPException(
+            status_code=403,
+            detail="You have been blocked from rejoining this train group due to repeated abuse reports.",
+        )
+
     await _ensure_train_can_be_joined(body.train_number, boarding_date, canonical_run_date)
 
     existing = fb_db.reference(f"user_journeys/{uid}").get() or {}
@@ -1002,13 +1009,13 @@ async def complete_journey(journey_id: str, user: dict = Depends(get_current_use
         "status": "arrived",
         "completed_at": completion_time,
         "arrived_at": completion_time,
-        "cleanup_at": completion_time + 60 * 60 * 1000,
+        "cleanup_at": completion_time + _FALLBACK_GROUP_RETENTION_HOURS * 60 * 60 * 1000,
         "cleanup_reason": "manual_complete",
     })
     _post_system_message(
         group_id,
         "system_arrival_notice",
-        "Journey marked complete. This group will be deleted automatically in 1 hour.",
+        f"Journey marked complete. This group will be deleted automatically in {_FALLBACK_GROUP_RETENTION_HOURS} hours.",
         timestamp_ms=completion_time,
     )
     
@@ -1034,7 +1041,7 @@ async def complete_journey(journey_id: str, user: dict = Depends(get_current_use
         logger.warning("Journey completion email skipped because no email was found for uid=%s", uid)
     
     return {
-        "message": "Journey marked as completed. Group will be deleted in 1 hour.",
+        "message": f"Journey marked as completed. Group will be deleted in {_FALLBACK_GROUP_RETENTION_HOURS} hours.",
         "group_id": group_id,
     }
 

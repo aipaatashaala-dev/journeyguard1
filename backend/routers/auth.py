@@ -1,10 +1,29 @@
+import base64
+import hashlib
+import hmac
+import json
+import os
+import secrets
+
 from fastapi import APIRouter, HTTPException, Depends
 from firebase_admin import auth as fb_auth, db as fb_db
 import time
-from models.schemas import RegisterRequest, LoginRequest, UpdateUserProfileRequest, SetPasswordRequest
+from models.schemas import (
+    RegisterRequest,
+    LoginRequest,
+    UpdateUserProfileRequest,
+    SetPasswordRequest,
+    PasswordResetOtpRequest,
+    PasswordResetOtpVerifyRequest,
+    PasswordResetCompleteRequest,
+)
 from dependencies import get_current_user
+from services.email_service import send_password_reset_otp_email
 
 router = APIRouter()
+PASSWORD_RESET_OTP_SECRET = os.getenv("PASSWORD_RESET_OTP_SECRET", os.getenv("ADMIN_OTP_SECRET", os.getenv("LOCATION_TOKEN_SECRET", "journeyguard-reset-secret")))
+PASSWORD_RESET_OTP_TTL_SECONDS = int(os.getenv("PASSWORD_RESET_OTP_TTL_SECONDS", "600"))
+PASSWORD_RESET_SESSION_TTL_SECONDS = int(os.getenv("PASSWORD_RESET_SESSION_TTL_SECONDS", "900"))
 
 
 def _normalize_display_name(value: str | None) -> str | None:
@@ -12,6 +31,60 @@ def _normalize_display_name(value: str | None) -> str | None:
         return None
     normalized = " ".join(str(value).strip().split())[:40]
     return normalized or None
+
+
+def _password_reset_ref(email: str):
+    safe_key = email.replace(".", ",")
+    return fb_db.reference(f"auth/password_reset/{safe_key}")
+
+
+def _sign_password_reset_text(value: str) -> str:
+    return hmac.new(PASSWORD_RESET_OTP_SECRET.encode(), value.encode(), hashlib.sha256).hexdigest()
+
+
+def _issue_password_reset_token(email: str) -> dict:
+    expires_at = int(time.time()) + PASSWORD_RESET_SESSION_TTL_SECONDS
+    payload = {
+        "email": email,
+        "exp": expires_at,
+        "type": "password-reset",
+    }
+    encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    signature = _sign_password_reset_text(encoded)
+    return {
+        "reset_token": f"{encoded}.{signature}",
+        "expires_at": expires_at,
+    }
+
+
+def _verify_password_reset_token(email: str, token: str):
+    try:
+        encoded, signature = token.rsplit(".", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid reset token") from exc
+
+    if not hmac.compare_digest(signature, _sign_password_reset_text(encoded)):
+        raise HTTPException(status_code=401, detail="Invalid reset token signature")
+
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4)).decode())
+    except Exception as exc:
+        raise HTTPException(status_code=401, detail="Invalid reset token payload") from exc
+
+    if payload.get("type") != "password-reset":
+        raise HTTPException(status_code=401, detail="Invalid reset token type")
+    if int(payload.get("exp", 0)) < int(time.time()):
+        raise HTTPException(status_code=401, detail="Password reset session expired")
+    if payload.get("email", "").strip().lower() != email.strip().lower():
+        raise HTTPException(status_code=403, detail="Reset token email does not match")
+    return payload
+
+
+def _user_by_email(email: str):
+    try:
+        return fb_auth.get_user_by_email(email)
+    except fb_auth.UserNotFoundError:
+        return None
 
 
 def _sync_active_journey_profile(uid: str, display_name: str | None = None):
@@ -130,3 +203,100 @@ async def set_password(body: SetPasswordRequest, current_user: dict = Depends(ge
         return {"message": "Password set successfully"}
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Failed to set password: {str(e)}")
+
+
+@router.post("/forgot-password/request-otp")
+async def request_password_reset_otp(body: PasswordResetOtpRequest):
+    email = body.email.strip().lower()
+    user = _user_by_email(email)
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for this email")
+
+    otp = f"{secrets.randbelow(1000000):06d}"
+    now = int(time.time())
+    _password_reset_ref(email).set({
+        "otp_hash": _sign_password_reset_text(f"{email}:{otp}"),
+        "requested_at": now,
+        "expires_at": now + PASSWORD_RESET_OTP_TTL_SECONDS,
+        "attempts": 0,
+        "uid": user.uid,
+    })
+
+    sent = send_password_reset_otp_email(
+        to_email=email,
+        otp=otp,
+        expires_minutes=max(1, PASSWORD_RESET_OTP_TTL_SECONDS // 60),
+    )
+    if not sent:
+        raise HTTPException(status_code=500, detail="Could not send OTP email")
+
+    return {"message": f"OTP sent to {email}", "expires_in": PASSWORD_RESET_OTP_TTL_SECONDS}
+
+
+@router.post("/forgot-password/verify-otp")
+async def verify_password_reset_otp(body: PasswordResetOtpVerifyRequest):
+    email = body.email.strip().lower()
+    otp = body.otp.strip()
+    otp_data = _password_reset_ref(email).get() or {}
+    if not otp_data:
+        raise HTTPException(status_code=404, detail="No OTP request found. Request a new one.")
+
+    if int(otp_data.get("expires_at", 0)) < int(time.time()):
+        _password_reset_ref(email).delete()
+        raise HTTPException(status_code=410, detail="OTP has expired. Request a new one.")
+
+    attempts = int(otp_data.get("attempts", 0)) + 1
+    if attempts > 5:
+        _password_reset_ref(email).delete()
+        raise HTTPException(status_code=429, detail="Too many invalid OTP attempts")
+
+    expected_hash = otp_data.get("otp_hash", "")
+    if not hmac.compare_digest(expected_hash, _sign_password_reset_text(f"{email}:{otp}")):
+        _password_reset_ref(email).update({"attempts": attempts})
+        raise HTTPException(status_code=401, detail="Invalid OTP")
+
+    token_payload = _issue_password_reset_token(email)
+    _password_reset_ref(email).update({
+        "verified_at": int(time.time()),
+        "reset_token_hash": _sign_password_reset_text(token_payload["reset_token"]),
+        "reset_token_expires_at": token_payload["expires_at"],
+        "attempts": attempts,
+    })
+    return {
+        "message": "OTP verified",
+        **token_payload,
+    }
+
+
+@router.post("/forgot-password/reset")
+async def reset_password_with_otp(body: PasswordResetCompleteRequest):
+    email = body.email.strip().lower()
+    reset_state = _password_reset_ref(email).get() or {}
+    if not reset_state:
+        raise HTTPException(status_code=404, detail="No reset session found. Verify OTP again.")
+
+    _verify_password_reset_token(email, body.reset_token)
+
+    stored_token_hash = str(reset_state.get("reset_token_hash") or "")
+    if not stored_token_hash or not hmac.compare_digest(stored_token_hash, _sign_password_reset_text(body.reset_token)):
+        raise HTTPException(status_code=401, detail="Reset token is no longer valid")
+
+    if int(reset_state.get("reset_token_expires_at", 0)) < int(time.time()):
+        _password_reset_ref(email).delete()
+        raise HTTPException(status_code=410, detail="Reset session expired. Verify OTP again.")
+
+    user = _user_by_email(email)
+    if not user:
+        _password_reset_ref(email).delete()
+        raise HTTPException(status_code=404, detail="No account found for this email")
+
+    try:
+        fb_auth.update_user(user.uid, password=body.password)
+        fb_db.reference(f"users/{user.uid}").update({
+            "password_set": True,
+            "updated_at": int(time.time() * 1000),
+        })
+        _password_reset_ref(email).delete()
+        return {"message": "Password reset successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to reset password: {str(e)}")

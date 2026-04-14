@@ -48,6 +48,36 @@ class SetPasswordRequest(BaseModel):
         return v
 
 
+class PasswordResetOtpRequest(BaseModel):
+    email: EmailStr
+
+
+class PasswordResetOtpVerifyRequest(BaseModel):
+    email: EmailStr
+    otp: str
+
+
+class PasswordResetCompleteRequest(BaseModel):
+    email: EmailStr
+    reset_token: str
+    password: str
+    confirm_password: str
+
+    @field_validator("password")
+    @classmethod
+    def pw_min_length(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters")
+        return v
+
+    @field_validator("confirm_password")
+    @classmethod
+    def passwords_match(cls, v, info):
+        if v != info.data.get("password"):
+            raise ValueError("Passwords do not match")
+        return v
+
+
 class UpdateUserProfileRequest(BaseModel):
     email: Optional[str] = None
     display_name: Optional[str] = None
@@ -202,6 +232,10 @@ class AssistanceRequestUpdate(BaseModel):
     lat: Optional[float] = None
     lng: Optional[float] = None
     accuracy: Optional[float] = None
+
+
+class MessageReportRequest(BaseModel):
+    reason: Optional[str] = None
 
 
 class StartLocationRequest(BaseModel):

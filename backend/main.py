@@ -41,7 +41,11 @@ _request_wait_timeout = max(0.1, float(os.getenv("REQUEST_WAIT_TIMEOUT_SECONDS",
 def _traffic_policy(path: str) -> tuple[int, float, bool]:
     if path.startswith("/pnr") or path.startswith("/journey/train-info"):
         return 24, 0.8, True
-    if path.startswith("/auth/register") or path.startswith("/auth/set-password"):
+    if (
+        path.startswith("/auth/register")
+        or path.startswith("/auth/set-password")
+        or path.startswith("/auth/forgot-password/")
+    ):
         return 10, 0.2, False
     if path.startswith("/auth/profile"):
         return 20, 0.5, False

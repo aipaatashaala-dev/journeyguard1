@@ -18,7 +18,7 @@ from models.schemas import (
     PasswordResetCompleteRequest,
 )
 from dependencies import get_current_user
-from services.email_service import send_password_reset_otp_email
+from services.email_service import send_password_reset_otp_email, get_last_email_error
 
 router = APIRouter()
 PASSWORD_RESET_OTP_SECRET = os.getenv("PASSWORD_RESET_OTP_SECRET", os.getenv("ADMIN_OTP_SECRET", os.getenv("LOCATION_TOKEN_SECRET", "journeyguard-reset-secret")))
@@ -228,7 +228,8 @@ async def request_password_reset_otp(body: PasswordResetOtpRequest):
         expires_minutes=max(1, PASSWORD_RESET_OTP_TTL_SECONDS // 60),
     )
     if not sent:
-        raise HTTPException(status_code=500, detail="Could not send OTP email")
+        detail = get_last_email_error() or "Could not send OTP email"
+        raise HTTPException(status_code=500, detail=f"Could not send OTP email: {detail}")
 
     return {"message": f"OTP sent to {email}", "expires_in": PASSWORD_RESET_OTP_TTL_SECONDS}
 

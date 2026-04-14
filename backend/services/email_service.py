@@ -21,6 +21,16 @@ from email.utils import formataddr, parseaddr
 from html import escape
 
 logger = logging.getLogger(__name__)
+_last_email_error = ""
+
+
+def _set_last_email_error(message: str):
+    global _last_email_error
+    _last_email_error = str(message or "").strip()
+
+
+def get_last_email_error() -> str:
+    return _last_email_error
 
 
 def _email_settings() -> dict:
@@ -199,14 +209,17 @@ def _send(to: str, subject: str, html_body: str) -> bool:
     email_port = settings["port"]
 
     if not recipient:
+        _set_last_email_error("Recipient email address is missing")
         logger.warning("Email send skipped because recipient address is missing")
         return False
 
     if not email_user or not email_password:
+        _set_last_email_error("SMTP username or password is not configured on the server")
         logger.warning("Email credentials not configured; skipping send to %s", recipient)
         return False
 
     try:
+        _set_last_email_error("")
         msg = MIMEMultipart("alternative")
         msg["Subject"] = Header(subject, "utf-8").encode()
         msg["From"] = email_from
@@ -229,7 +242,8 @@ def _send(to: str, subject: str, html_body: str) -> bool:
 
         logger.info("Email sent to %s: %s", recipient, subject)
         return True
-    except Exception:
+    except Exception as exc:
+        _set_last_email_error(str(exc))
         logger.exception("Failed to send email to %s: %s", recipient, subject)
         return False
 

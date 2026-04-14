@@ -16,7 +16,16 @@ backend/.env
 frontend/node_modules/
 backend/firebase-credentials.json
 *.json
+!package.json
+!package-lock.json
+!frontend/package.json
+!frontend/package-lock.json
 .env
+node_modules/
+frontend/build/
+*.apk
+*.iml
+.gradle/
 
 
 node_modules/

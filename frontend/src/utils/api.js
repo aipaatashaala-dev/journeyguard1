@@ -85,6 +85,9 @@ const readStoredJourneySnapshot = () => {
 // ---------- Auth ----------
 export const registerUser = (data) => api.post('/auth/register', data);
 export const loginUser = (data) => api.post('/auth/login', data);
+export const requestPasswordResetOtp = (data) => api.post('/auth/forgot-password/request-otp', data);
+export const verifyPasswordResetOtp = (data) => api.post('/auth/forgot-password/verify-otp', data);
+export const resetPasswordWithOtp = (data) => api.post('/auth/forgot-password/reset', data);
 
 // ---------- PNR ----------
 export const fetchPnr = (pnr) => api.get(`/pnr/${pnr}`);
@@ -119,6 +122,8 @@ export const updateRequest = (journeyId, coachId, requestId, data) =>
   api.put(`/requests/${journeyId}/${coachId}/${requestId}`, data);
 export const deleteRequest = (journeyId, coachId, requestId) =>
   api.delete(`/requests/${journeyId}/${coachId}/${requestId}`);
+export const reportRequest = (journeyId, coachId, requestId, data = {}) =>
+  api.post(`/requests/${journeyId}/${coachId}/${requestId}/report`, data);
 
 // ---------- Location ----------
 export const startLocationTracking = (data) =>

@@ -17,6 +17,7 @@ import {
   Copy,
   ExternalLink,
   TrainFront,
+  Flag,
 } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import {
@@ -29,6 +30,7 @@ import {
   updateLocation,
   deleteRequest,
   updateRequest,
+  reportRequest,
 } from '../utils/api';
 import { API_BASE_URL } from '../utils/config';
 import { saveDisplayName as persistDisplayName } from '../utils/displayName';
@@ -328,6 +330,26 @@ export default function GroupPage() {
       toast.success('Message removed');
     } catch (error) {
       toast.error(error?.response?.data?.detail || 'Could not delete this message');
+    }
+  };
+
+  const handleReportMessage = async (message) => {
+    if (!message?.id || message.uid === user?.uid || message.type === 'SYSTEM' || message.is_system) {
+      return;
+    }
+
+    const reason = window.prompt('Tell us briefly why you are reporting this message.', 'Abusive language');
+    if (reason === null) return;
+
+    try {
+      const { data } = await reportRequest(journeyId, coachId, message.id, { reason });
+      if (data?.blocked) {
+        toast.success('Report submitted. This passenger has now been blocked from the group.');
+      } else {
+        toast.success(`Report submitted. ${data?.reports_remaining ?? ''} more report(s) needed for auto-block.`);
+      }
+    } catch (error) {
+      toast.error(error?.response?.data?.detail || 'Could not report this message');
     }
   };
 
@@ -870,6 +892,12 @@ export default function GroupPage() {
                         {!isMine && !isAccepted && type.id !== 'SYSTEM' && (
                           <button className="action-chip" onClick={() => setReplyTo(message)}>
                             Reply
+                          </button>
+                        )}
+                        {!isMine && type.id !== 'SYSTEM' && (
+                          <button className="action-chip" onClick={() => handleReportMessage(message)}>
+                            <Flag size={14} />
+                            Report
                           </button>
                         )}
                         {type.id !== 'CHAT' && type.id !== 'SYSTEM' && !isMine && !isAccepted && (

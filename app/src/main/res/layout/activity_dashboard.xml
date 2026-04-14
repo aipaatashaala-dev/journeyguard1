@@ -12,43 +12,54 @@
         android:orientation="vertical"
         android:padding="20dp">
 
-        <!-- Header -->
         <ImageView
             android:layout_width="80dp"
             android:layout_height="80dp"
             android:layout_gravity="center"
-            android:src="@drawable/ic_journeyguard_logo"
+            android:layout_marginBottom="16dp"
             android:contentDescription="@string/logo_desc"
-            android:layout_marginBottom="16dp" />
+            android:src="@drawable/ic_journeyguard_logo" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textSize="30sp"
-            android:textStyle="bold"
-            android:textColor="@color/white"
             android:gravity="center"
             android:paddingTop="8dp"
-            android:paddingBottom="4dp"/>
+            android:paddingBottom="4dp"
+            android:text="@string/app_name"
+            android:textColor="@color/white"
+            android:textSize="30sp"
+            android:textStyle="bold" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/tagline"
-            android:textSize="14sp"
-            android:textColor="@color/white"
             android:gravity="center"
-            android:paddingBottom="20dp"/>
+            android:paddingBottom="20dp"
+            android:text="@string/tagline"
+            android:textColor="@color/white"
+            android:textSize="14sp" />
 
-        <!-- Status Card -->
+        <TextView
+            android:id="@+id/protectionBanner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:background="@color/card_dark"
+            android:gravity="center"
+            android:padding="14dp"
+            android:text="@string/protection_stopped_banner"
+            android:textColor="@color/white"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardCornerRadius="12dp"
+            android:layout_marginBottom="20dp"
             app:cardBackgroundColor="@color/card_dark"
-            app:cardElevation="4dp"
-            android:layout_marginBottom="20dp">
+            app:cardCornerRadius="12dp"
+            app:cardElevation="4dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -60,51 +71,49 @@
                     android:id="@+id/serviceStatusText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:paddingBottom="6dp"
                     android:text="@string/service_stopped"
-                    android:textSize="16sp"
                     android:textColor="@color/white"
-                    android:textStyle="bold"
-                    android:paddingBottom="6dp"/>
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:alpha="0.82"
                     android:text="@string/mobile_protection_summary"
-                    android:textSize="13sp"
                     android:textColor="@color/white"
-                    android:alpha="0.82" />
+                    android:textSize="13sp" />
 
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Buttons -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnStartProtection"
             style="?attr/materialButtonStyle"
             android:layout_width="match_parent"
             android:layout_height="54dp"
-            android:text="@string/btn_start_protection"
-            android:textSize="15sp"
+            android:layout_marginBottom="10dp"
             android:backgroundTint="@color/secondary"
-            android:layout_marginBottom="10dp"/>
+            android:text="@string/btn_start_protection"
+            android:textSize="15sp" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnStopProtection"
             style="?attr/materialButtonStyle"
             android:layout_width="match_parent"
             android:layout_height="54dp"
-            android:text="@string/btn_stop_protection"
-            android:textSize="15sp"
+            android:layout_marginBottom="20dp"
             android:backgroundTint="@color/danger_red"
-            android:layout_marginBottom="20dp"/>
+            android:text="@string/btn_stop_protection"
+            android:textSize="15sp" />
 
-        <!-- IMEI Card -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardCornerRadius="8dp"
+            android:layout_marginBottom="20dp"
             app:cardBackgroundColor="@color/card_dark"
-            android:layout_marginBottom="20dp">
+            app:cardCornerRadius="8dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -116,31 +125,30 @@
                     android:id="@+id/imeiText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="📱 IMEI: Not set"
-                    android:textSize="14sp"
+                    android:selectable="true"
+                    android:text="@string/imei_default"
                     android:textColor="@color/white"
-                    android:textStyle="bold"
-                    android:selectable="true"/>
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="Device verification for future recovery"
-                    android:textSize="12sp"
-                    android:textColor="@color/white"
                     android:alpha="0.7"
-                    android:paddingTop="6dp"/>
+                    android:paddingTop="6dp"
+                    android:text="@string/device_id_summary"
+                    android:textColor="@color/white"
+                    android:textSize="12sp" />
 
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- User Profile Details Card -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardCornerRadius="8dp"
+            android:layout_marginBottom="20dp"
             app:cardBackgroundColor="@color/card_dark"
-            android:layout_marginBottom="20dp">
+            app:cardCornerRadius="8dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -152,22 +160,21 @@
                     android:id="@+id/userDetailsText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="👤 Account Details"
-                    android:textSize="13sp"
-                    android:textColor="@color/white"
                     android:selectable="true"
-                    android:typeface="monospace"/>
+                    android:text="Account Details"
+                    android:textColor="@color/white"
+                    android:textSize="13sp"
+                    android:typeface="monospace" />
 
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Speed card -->
         <androidx.cardview.widget.CardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            app:cardCornerRadius="8dp"
+            android:layout_marginBottom="20dp"
             app:cardBackgroundColor="@color/card_dark"
-            android:layout_marginBottom="20dp">
+            app:cardCornerRadius="8dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -178,30 +185,29 @@
                 <TextView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:paddingBottom="6dp"
                     android:text="@string/speed_label"
-                    android:textSize="16sp"
                     android:textColor="@color/white"
-                    android:textStyle="bold"
-                    android:paddingBottom="6dp"/>
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
 
                 <TextView
                     android:id="@+id/speedText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="0 km/h"
-                    android:textSize="14sp"
-                    android:textColor="@color/white"/>
+                    android:textColor="@color/white"
+                    android:textSize="14sp" />
 
             </LinearLayout>
         </androidx.cardview.widget.CardView>
 
-        <!-- Support -->
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnSupport"
             style="?attr/materialButtonOutlinedStyle"
             android:layout_width="match_parent"
             android:layout_height="54dp"
-            android:text="@string/support_button"/>
+            android:text="@string/support_button" />
 
     </LinearLayout>
 </ScrollView>

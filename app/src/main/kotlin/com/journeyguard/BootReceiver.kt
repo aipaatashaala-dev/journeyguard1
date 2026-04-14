@@ -31,7 +31,11 @@ class BootReceiver : BroadcastReceiver() {
         }
 
         try {
-            // simply start the protection service after boot if not already running
+            if (!ProtectionPreferences.isProtectionExpected(context)) {
+                Log.d(TAG, "Protection not expected after boot; skipping service start")
+                return
+            }
+
             if (ProtectionService.isRunning) {
                 Log.d(TAG, "ProtectionService already running")
                 return

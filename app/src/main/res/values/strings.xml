@@ -2,32 +2,59 @@
 <resources>
     <string name="app_name">JourneyGuard</string>
     <string name="logo_desc">JourneyGuard logo</string>
-    <string name="tagline">Trusted AI Lock Protection</string>
-    <string name="train_face">Train Owner Face</string>
+    <string name="tagline">Trusted Mobile Protection</string>
     <string name="service_stopped">Mobile protection: Stopped</string>
     <string name="service_running">Mobile protection: Active</string>
-    <string name="face_not_trained">Face: Not Trained</string>
-    <string name="face_trained">Face: Trained</string>
     <string name="btn_start_protection">Enable Mobile Protection</string>
     <string name="btn_stop_protection">Stop Mobile Protection</string>
-    <string name="btn_test_verify">Test Face Verify</string>
-    <string name="btn_simulate_alarm">Simulate Alarm</string>
-    <string name="btn_clear_face">Clear Face Data</string>
     <string name="instructions_header">How to use:</string>
-    <string name="instructions_steps">1. Tap Train Owner Face and capture your face.
-2. Tap Enable Mobile Protection to activate background protection.
-3. Motion while locked triggers a 10-second unlock grace period.
-4. If still locked, the phone vibrates for 10 seconds.
-5. The alarm then keeps ringing until the phone is unlocked.</string>
-    <string name="login_username">Username</string>
+    <string name="instructions_steps">1. Tap Enable Mobile Protection to activate background protection.
+2. Motion while locked triggers a 10-second unlock grace period.
+3. If still locked, the phone vibrates for 10 seconds.
+4. The alarm then keeps ringing until the phone is unlocked.</string>
+    <string name="login_username">Email Address</string>
     <string name="login_password">Password</string>
     <string name="login_button">Log In</string>
     <string name="no_account">Don\'t have an account?</string>
     <string name="register_button">Register</string>
-    <string name="register_username">Choose username</string>
+    <string name="register_username">Email Address</string>
     <string name="register_password">Choose password</string>
     <string name="speed_label">Speed</string>
     <string name="support_button">24/7 Support</string>
     <string name="support_email">support@journeyguard.com</string>
     <string name="mobile_protection_summary">Sensor-based motion detection watches the phone while locked. If movement is detected, JourneyGuard waits 10 seconds, vibrates for 10 seconds, then starts the alarm until you unlock the device.</string>
+    <string name="imei_default">IMEI: Not set</string>
+    <string name="imei_label">IMEI: %1$s</string>
+    <string name="device_id_summary">Device identification for recovery and ownership support</string>
+    <string name="account_details_format">Account Details
+------------------------------
+Name: %1$s
+Phone: %2$s
+IMEI: %3$s
+Joined: %4$s</string>
+    <string name="phone_label">Mobile Number</string>
+    <string name="imei_hint">Enter IMEI (15 digits)</string>
+    <string name="imei_info">i</string>
+    <string name="imei_guide">How to get IMEI:\n1. Open Phone Dialer\n2. Dial: *#06#\n3. Your 15-digit IMEI will appear\n\nWhy we need it: If you lose your phone, we can help confirm device ownership.</string>
+    <string name="sync_waiting">Backend sync pending</string>
+    <string name="sync_active_remote">Mobile protection: Active (remote synced)</string>
+    <string name="sync_active_local">Mobile protection: Active (phone started)</string>
+    <string name="sync_stopped_remote">Mobile protection: Stopped (remote synced)</string>
+    <string name="protection_started_banner">Protection is started and monitoring this phone</string>
+    <string name="protection_stopped_banner">Protection is stopped</string>
+    <string name="notification_permission_denied">Allow notifications so JourneyGuard can warn you about suspicious activity</string>
+    <string name="notification_active_title">JourneyGuard protection started</string>
+    <string name="notification_active_text">Protection is started and watching this phone while it is locked.</string>
+    <string name="notification_suspicious_title">Suspicious movement detected</string>
+    <string name="notification_suspicious_text">Unlock within 10 seconds to stop the warning sequence.</string>
+    <string name="notification_warning_title">Warning vibration started</string>
+    <string name="notification_warning_text">The phone stayed locked. JourneyGuard is vibrating for 10 seconds.</string>
+    <string name="notification_alarm_title">Alarm started</string>
+    <string name="notification_alarm_text">The alarm is getting louder and will continue until you unlock the phone.</string>
+    <string name="notification_alert_channel_description">Critical JourneyGuard alerts for suspicious movement and alarm escalation.</string>
+    <string name="login_invalid">Invalid email or password</string>
+    <string name="login_fill_required">Enter email and password</string>
+    <string name="register_fill_required">Fill all fields including Phone and IMEI</string>
+    <string name="register_invalid_email">Enter a valid email address</string>
+    <string name="remote_sync_error">Could not sync with protection server</string>
 </resources>

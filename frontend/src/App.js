@@ -21,6 +21,7 @@ import AdminJourneys from './pages/AdminJourneys';
 import AdminLocations from './pages/AdminLocations';
 import AdminRequests from './pages/AdminRequests';
 import { hasValidAdminSession } from './utils/adminApi';
+import CookieBanner from './components/CookieBanner';
 
 function PrivateRoute({ children }) {
   const { user } = useAuth();
@@ -69,6 +70,7 @@ export default function App() {
     <AuthProvider>
       <BrowserRouter>
         <AppRoutes />
+        <CookieBanner />
         <Toaster
           position="top-center"
           toastOptions={{

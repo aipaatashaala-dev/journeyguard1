@@ -88,7 +88,7 @@ export default function ProtectionPage() {
 
   useEffect(() => {
     refreshProtectionState(true);
-    const intervalId = window.setInterval(() => refreshProtectionState(false), 15000);
+    const intervalId = window.setInterval(() => refreshProtectionState(false), 3000);
     return () => window.clearInterval(intervalId);
   }, [refreshProtectionState]);
 

@@ -9,35 +9,35 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:gravity="center_horizontal"
         android:orientation="vertical"
-        android:padding="24dp"
-        android:gravity="center_horizontal">
+        android:padding="24dp">
 
         <ImageView
             android:layout_width="80dp"
             android:layout_height="80dp"
-            android:src="@drawable/ic_journeyguard_logo"
-            android:contentDescription="@string/logo_desc"
             android:layout_marginTop="60dp"
-            android:layout_marginBottom="32dp" />
+            android:layout_marginBottom="32dp"
+            android:contentDescription="@string/logo_desc"
+            android:src="@drawable/ic_journeyguard_logo" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:gravity="center"
             android:text="@string/register_button"
-            android:textSize="24sp"
-            android:textStyle="bold"
             android:textColor="@color/white"
-            android:gravity="center" />
+            android:textSize="24sp"
+            android:textStyle="bold" />
 
         <EditText
             android:id="@+id/etUsername"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
-            android:hint="@string/register_username"
-            android:inputType="textPersonName"
             android:backgroundTint="@color/white"
+            android:hint="@string/register_username"
+            android:inputType="textEmailAddress"
             android:textColor="@color/white" />
 
         <EditText
@@ -45,9 +45,9 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
+            android:backgroundTint="@color/white"
             android:hint="@string/register_password"
             android:inputType="textPassword"
-            android:backgroundTint="@color/white"
             android:textColor="@color/white" />
 
         <EditText
@@ -55,27 +55,27 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:hint="Mobile Number"
-            android:inputType="phone"
             android:backgroundTint="@color/white"
+            android:hint="@string/phone_label"
+            android:inputType="phone"
             android:textColor="@color/white" />
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
             android:layout_marginTop="12dp"
-            android:gravity="center_vertical">
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
             <EditText
                 android:id="@+id/etIMEI"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:hint="Enter IMEI (15 digits)"
+                android:backgroundTint="@color/white"
+                android:hint="@string/imei_hint"
                 android:inputType="number"
                 android:maxLength="15"
-                android:backgroundTint="@color/white"
                 android:textColor="@color/white" />
 
             <Button
@@ -83,8 +83,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
-                android:text="ℹ️"
                 android:background="?attr/selectableItemBackgroundBorderless"
+                android:text="@string/imei_info"
                 android:textSize="18sp" />
 
         </LinearLayout>
@@ -94,11 +94,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="📱 How to get IMEI:\n1. Open Phone Dialer\n2. Dial: *#06#\n3. Your 15-digit IMEI will appear\n\n💡 Why? If you lose your phone, we can help verify device ownership."
-            android:textColor="@color/white"
-            android:textSize="12sp"
             android:background="@android:color/darker_gray"
             android:padding="8dp"
+            android:text="@string/imei_guide"
+            android:textColor="@color/white"
+            android:textSize="12sp"
             android:visibility="gone" />
 
         <com.google.android.material.button.MaterialButton

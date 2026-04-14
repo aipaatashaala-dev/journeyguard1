@@ -1,21 +1,45 @@
 package com.journeyguard
 
-import android.app.*
-import android.content.*
-import android.hardware.*
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.app.KeyguardManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.media.MediaPlayer
-import android.os.*
+import android.os.Build
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class ProtectionService : Service(), SensorEventListener {
 
     companion object {
 
         const val CHANNEL_ID = "jg_protection"
+        private const val ALERT_CHANNEL_ID = "jg_protection_alerts"
         const val NOTIF_ID = 1001
-        const val ACTION_STOP = "STOP_PROTECTION"
-
+        private const val ALERT_NOTIF_ID = 1002
         @Volatile
         var isRunning = false
             private set
@@ -45,7 +69,12 @@ class ProtectionService : Service(), SensorEventListener {
     private var currentVolume = 0.1f
 
     private var warningActive = false
+    private var findPhoneRingActive = false
+    private var lastHandledRingRequestAt = 0L
+    private var lastHandledRingStopAt = 0L
     private val vibrator: Vibrator by lazy { getSystemService(Vibrator::class.java) }
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var remotePollJob: Job? = null
 
     private val delayedStartRunnable = Runnable {
         if (isPhoneLocked()) {
@@ -106,6 +135,11 @@ class ProtectionService : Service(), SensorEventListener {
                     pendingThreatCheck = false
                     warningActive = false
                     vibrator.cancel()
+                    clearAlertNotification()
+                    refreshForegroundNotification(
+                        getString(R.string.notification_active_title),
+                        getString(R.string.notification_active_text)
+                    )
 
                     stopSensors()
                 }
@@ -127,6 +161,8 @@ class ProtectionService : Service(), SensorEventListener {
         }
 
         isRunning = true
+        ProtectionPreferences.setProtectionExpected(this, true)
+        JourneyGuardFirebase.ensureInitialized(this)
 
         try {
             keyguardManager = getSystemService(KeyguardManager::class.java)
@@ -148,9 +184,16 @@ class ProtectionService : Service(), SensorEventListener {
             registerReceiver(usageReceiver, screenFilter)
 
             createChannel()
-            startForeground(NOTIF_ID, buildNotification())
+            startForeground(
+                NOTIF_ID,
+                buildNotification(
+                    getString(R.string.notification_active_title),
+                    getString(R.string.notification_active_text)
+                )
+            )
 
             Log.d(TAG, "Protection service started")
+            startRemotePolling()
 
             if (isPhoneLocked()) {
                 Log.d(TAG, "Phone locked -> sensors started")
@@ -171,12 +214,15 @@ class ProtectionService : Service(), SensorEventListener {
 
             stopSensors()
             stopAlarm()
+            remotePollJob?.cancel()
+            clearAlertNotification()
 
             stopForeground(STOP_FOREGROUND_REMOVE)
         } catch (_: Exception) {
         }
 
         isRunning = false
+        ProtectionPreferences.setProtectionExpected(this, false)
 
         Log.d(TAG, "Protection service stopped")
     }
@@ -184,12 +230,6 @@ class ProtectionService : Service(), SensorEventListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            Log.d(TAG, "Stop action received from notification")
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         return START_STICKY
     }
 
@@ -265,11 +305,27 @@ class ProtectionService : Service(), SensorEventListener {
 
         pendingThreatCheck = true
         Log.d(TAG, "Suspicious event detected -> waiting 10s for unlock")
+        showAlertNotification(
+            getString(R.string.notification_suspicious_title),
+            getString(R.string.notification_suspicious_text)
+        )
+        refreshForegroundNotification(
+            getString(R.string.notification_suspicious_title),
+            getString(R.string.notification_suspicious_text)
+        )
         handler.postDelayed(gracePeriodRunnable, UNLOCK_GRACE_PERIOD_MS)
     }
 
     private fun startWarningPhase() {
         warningActive = true
+        showAlertNotification(
+            getString(R.string.notification_warning_title),
+            getString(R.string.notification_warning_text)
+        )
+        refreshForegroundNotification(
+            getString(R.string.notification_warning_title),
+            getString(R.string.notification_warning_text)
+        )
         vibrateWarning()
         handler.postDelayed(warningTimeoutRunnable, WARNING_VIBRATION_MS)
     }
@@ -318,6 +374,14 @@ class ProtectionService : Service(), SensorEventListener {
         currentVolume = 0.1f
         alarmPlayer?.setVolume(currentVolume, currentVolume)
         alarmPlayer?.start()
+        showAlertNotification(
+            getString(R.string.notification_alarm_title),
+            getString(R.string.notification_alarm_text)
+        )
+        refreshForegroundNotification(
+            getString(R.string.notification_alarm_title),
+            getString(R.string.notification_alarm_text)
+        )
 
         increaseVolume()
     }
@@ -345,37 +409,116 @@ class ProtectionService : Service(), SensorEventListener {
 
     private fun stopAlarm() {
         cancelPendingThreatFlow()
+        findPhoneRingActive = false
 
         alarmPlayer?.stop()
         alarmPlayer?.release()
         alarmPlayer = null
 
+        clearAlertNotification()
+        refreshForegroundNotification(
+            getString(R.string.notification_active_title),
+            getString(R.string.notification_active_text)
+        )
         Log.d(TAG, "Alarm stopped")
     }
 
-    private fun buildNotification(): Notification {
-        val stopIntent = Intent(this, ProtectionService::class.java).apply {
-            action = ACTION_STOP
-        }
+    private fun startFindPhoneRing() {
+        if (alarmPlayer != null && findPhoneRingActive) return
 
-        val stopPendingIntent = PendingIntent.getService(
+        cancelPendingThreatFlow()
+        alarmPlayer?.stop()
+        alarmPlayer?.release()
+
+        alarmPlayer = MediaPlayer.create(this, R.raw.alarm)
+        alarmPlayer?.isLooping = true
+        alarmPlayer?.setVolume(1f, 1f)
+        alarmPlayer?.start()
+        findPhoneRingActive = true
+        Log.d(TAG, "Find phone ring started")
+    }
+
+    private fun startRemotePolling() {
+        remotePollJob?.cancel()
+        remotePollJob = serviceScope.launch {
+            while (isActive) {
+                runCatching {
+                    val state = ProtectionRemoteApi.getProtectionState()
+
+                    if (state.ringStopRequestedAt > lastHandledRingStopAt) {
+                        lastHandledRingStopAt = state.ringStopRequestedAt
+                        if (findPhoneRingActive) {
+                            stopAlarm()
+                        }
+                    }
+
+                    if (
+                        state.ringRequestedAt > lastHandledRingRequestAt &&
+                        state.ringRequestedAt > state.ringStopRequestedAt
+                    ) {
+                        lastHandledRingRequestAt = state.ringRequestedAt
+                        startFindPhoneRing()
+                    }
+
+                    if (!state.active && !findPhoneRingActive) {
+                        stopSelf()
+                        return@launch
+                    }
+                }
+                delay(2500L)
+            }
+        }
+    }
+
+    private fun buildNotification(title: String, text: String): Notification {
+        val dashboardIntent = Intent(this, DashboardActivity::class.java)
+        val dashboardPendingIntent = PendingIntent.getActivity(
             this,
             0,
-            stopIntent,
+            dashboardIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("JourneyGuard Mobile Protection Active")
-            .setContentText("Detecting motion while locked and protecting your phone")
+            .setContentTitle(title)
+            .setContentText(text)
             .setSmallIcon(R.drawable.ic_journeyguard_logo)
             .setOngoing(true)
-            .addAction(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Stop",
-                stopPendingIntent
-            )
+            .setOnlyAlertOnce(true)
+            .setContentIntent(dashboardPendingIntent)
             .build()
+    }
+
+    private fun refreshForegroundNotification(title: String, text: String) {
+        NotificationManagerCompat.from(this).notify(
+            NOTIF_ID,
+            buildNotification(title, text)
+        )
+    }
+
+    private fun showAlertNotification(title: String, text: String) {
+        val dashboardIntent = Intent(this, DashboardActivity::class.java)
+        val dashboardPendingIntent = PendingIntent.getActivity(
+            this,
+            1,
+            dashboardIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setSmallIcon(R.drawable.ic_journeyguard_logo)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(false)
+            .setContentIntent(dashboardPendingIntent)
+            .build()
+
+        NotificationManagerCompat.from(this).notify(ALERT_NOTIF_ID, notification)
+    }
+
+    private fun clearAlertNotification() {
+        NotificationManagerCompat.from(this).cancel(ALERT_NOTIF_ID)
     }
 
     private fun createChannel() {
@@ -388,7 +531,15 @@ class ProtectionService : Service(), SensorEventListener {
                 NotificationManager.IMPORTANCE_LOW
             )
 
+            val alertChannel = NotificationChannel(
+                ALERT_CHANNEL_ID,
+                "JourneyGuard Protection Alerts",
+                NotificationManager.IMPORTANCE_HIGH
+            )
+            alertChannel.description = getString(R.string.notification_alert_channel_description)
+
             manager.createNotificationChannel(channel)
+            manager.createNotificationChannel(alertChannel)
         }
     }
 }
